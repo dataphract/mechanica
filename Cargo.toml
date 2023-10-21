@@ -15,6 +15,7 @@ bitflags = "2.4.0"
 bitvec = "1.0.1"
 cordyceps = "0.3.2"
 glam = { version = "0.24.2", features = ["approx"] }
+hashbrown = "0.14.1"
 slotmap = "1.0.6"
 
 [dependencies."bevy"]

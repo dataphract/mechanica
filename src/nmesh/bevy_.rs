@@ -1,9 +1,8 @@
 use bevy::prelude::*;
 use bevy_mod_picking::{prelude::*, DefaultPickingPlugins, PickableBundle};
-use bevy_mod_raycast::NoBackfaceCulling;
 use bevy_transform_gizmo::TransformGizmoPlugin;
 
-use crate::nmesh::{EdgeKey, FaceKey, NMesh, VertKey};
+use super::{EdgeKey, FaceKey, NMesh, VertKey};
 
 struct NMeshPlugin;
 impl Plugin for NMeshPlugin {
