@@ -6,6 +6,7 @@ use bevy::{
     prelude::*,
     window::{CursorGrabMode, PrimaryWindow},
 };
+use bevy_egui::{egui, EguiContexts};
 use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
 use bevy_mod_picking::prelude::*;
 use bevy_transform_gizmo::GizmoPickSource;
@@ -58,13 +59,11 @@ fn setup(
         })
         .insert(SolidShadingLight);
 
-    create_nmesh(
-        commands,
-        &mut materials,
-        &mut meshes,
-        &mut nmeshes,
-        NMesh::cube(),
-    );
+    let mut cube = NMesh::cube();
+    let (ek, _) = cube.edges.iter().next().unwrap();
+    cube.edge_split(ek);
+
+    create_nmesh(commands, &mut materials, &mut meshes, &mut nmeshes, cube);
 }
 
 #[derive(Component)]
@@ -193,4 +192,8 @@ fn control_camera(
 
     let mut solid_light = solid_shading_light.get_single_mut().unwrap();
     *solid_light = Transform::from_rotation(transform.rotation);
+}
+
+fn draw_ui(mut contexts: EguiContexts) {
+    egui::Window::new("NMesh editor").show(contexts.ctx_mut(), |ui| {});
 }

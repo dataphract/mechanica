@@ -61,10 +61,11 @@ pub struct NLoop {
 #[derive(Debug, TypeUuid, TypePath)]
 #[uuid = "dbcb459d-3d09-4de7-afa8-61b85ae9e46f"]
 pub struct NMesh {
-    verts: SlotMap<VertKey, NVert>,
-    edges: SlotMap<EdgeKey, NEdge>,
-    loops: SlotMap<LoopKey, NLoop>,
-    faces: SlotMap<FaceKey, NFace>,
+    // TODO: don't pub these
+    pub verts: SlotMap<VertKey, NVert>,
+    pub edges: SlotMap<EdgeKey, NEdge>,
+    pub loops: SlotMap<LoopKey, NLoop>,
+    pub faces: SlotMap<FaceKey, NFace>,
 }
 
 impl NMesh {
@@ -422,61 +423,59 @@ impl NMesh {
         println!("new_edge = {new_edge:?}");
         println!("===");
 
-        if let Some(mut old_loop) = self.edges[edge].loop_ {
-            let first_loop = old_loop;
+        let Some(mut old_loop) = self.edges[edge].loop_ else {
+            return (new_edge, new_vert);
+        };
 
-            for it in 0..100 {
-                let radial_next = self.loop_radial_next(old_loop);
+        let first_loop = old_loop;
 
-                // Determine the direction of the edge for this face.
-                let (first_edge, second_edge);
-                if self.loops[old_loop].vert == v0 {
-                    first_edge = edge;
-                    second_edge = new_edge;
-                } else {
-                    debug_assert!(self.loops[old_loop].vert == v1);
+        loop {
+            let radial_next = self.loop_radial_next(old_loop);
 
-                    first_edge = new_edge;
-                    second_edge = edge;
-                }
+            // Determine the direction of the edge for this face.
+            let (first_edge, second_edge);
+            if self.loops[old_loop].vert == v0 {
+                first_edge = edge;
+                second_edge = new_edge;
+            } else {
+                debug_assert!(self.loops[old_loop].vert == v1);
 
-                let face = self.loops[old_loop].face;
-                let face_next = self.loop_face_next(old_loop);
+                first_edge = new_edge;
+                second_edge = edge;
+            }
 
-                let new_loop = self.loop_create(new_vert, second_edge, face);
-                self.loops[old_loop].edge = first_edge;
+            let face = self.loops[old_loop].face;
+            let face_next = self.loop_face_next(old_loop);
 
-                // Relink edges into the face.
-                self.loop_face_set_next(old_loop, new_loop);
-                self.loop_face_set_prev(new_loop, old_loop);
-                self.loop_face_set_next(new_loop, face_next);
-                self.loop_face_set_prev(face_next, new_loop);
+            let new_loop = self.loop_create(new_vert, second_edge, face);
+            self.loops[old_loop].edge = first_edge;
 
-                self.edge_radial_remove(first_edge, old_loop);
+            // Relink edges into the face.
+            self.loop_face_set_next(old_loop, new_loop);
+            self.loop_face_set_prev(new_loop, old_loop);
+            self.loop_face_set_next(new_loop, face_next);
+            self.loop_face_set_prev(face_next, new_loop);
 
-                // Relink edges into the appropriate radial loops.
-                self.edge_radial_add(first_edge, old_loop);
-                self.edge_radial_add(second_edge, new_loop);
+            self.edge_radial_remove(first_edge, old_loop);
 
-                let new_radial_next = self.loop_radial_next(old_loop);
+            // Relink edges into the appropriate radial loops.
+            self.edge_radial_add(first_edge, old_loop);
+            self.edge_radial_add(second_edge, new_loop);
 
-                println!("first_edge = {first_edge:?}");
-                println!("second_edge = {second_edge:?}");
-                println!("old_loop = {old_loop:?}");
-                println!("new_loop = {new_loop:?}");
-                println!("radial_next = {radial_next:?}");
-                println!("new_radial_next = {new_radial_next:?}");
-                println!("---");
+            let new_radial_next = self.loop_radial_next(old_loop);
 
-                old_loop = radial_next;
+            println!("first_edge = {first_edge:?}");
+            println!("second_edge = {second_edge:?}");
+            println!("old_loop = {old_loop:?}");
+            println!("new_loop = {new_loop:?}");
+            println!("radial_next = {radial_next:?}");
+            println!("new_radial_next = {new_radial_next:?}");
+            println!("---");
 
-                if old_loop == first_loop {
-                    break;
-                }
+            old_loop = radial_next;
 
-                if it == 99 {
-                    panic!("runaway loop :(");
-                }
+            if old_loop == first_loop {
+                break;
             }
         }
 
