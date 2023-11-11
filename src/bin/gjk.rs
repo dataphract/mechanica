@@ -13,7 +13,7 @@ use bevy_egui::{
 use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
 use bevy_mod_picking::{prelude::*, PickableBundle};
 use bevy_transform_gizmo::{GizmoPickSource, GizmoTransformable};
-use cg3::{gjk, Isometry, Sphere};
+use cg3::{gjk, hull::Hull, Isometry, Sphere};
 
 fn main() {
     App::new()
@@ -40,6 +40,7 @@ struct Collider {
 #[derive(Clone)]
 enum ColliderShape {
     Sphere(Sphere),
+    Hull(Hull),
 }
 
 fn spawn(mut commands: Commands) {
@@ -124,7 +125,7 @@ fn mesh_for_collider(collider: &ColliderShape) -> Mesh {
         //     }
         //     .into()
         // }
-        // ColliderShape::Polyhedron(p) => p.to_mesh(),
+        ColliderShape::Hull(h) => h.to_mesh(),
     }
 }
 
@@ -222,7 +223,21 @@ fn update_closest_points(
 
         let (on_a, on_b) = match (&a_obj.shape, &b_obj.shape) {
             (ColliderShape::Sphere(s1), ColliderShape::Sphere(s2)) => {
-                gjk::closest(s1, a_iso, s2, b_iso, &mut gizmos)
+                gjk::closest(s1, a_iso, s2, b_iso, Some(&mut gizmos))
+            }
+
+            (ColliderShape::Sphere(s), ColliderShape::Hull(h)) => {
+                // TODO
+                gjk::closest(s, a_iso, h, b_iso, Some(&mut gizmos))
+            }
+
+            (ColliderShape::Hull(h), ColliderShape::Sphere(s)) => {
+                gjk::closest(h, a_iso, s, b_iso, Some(&mut gizmos))
+            }
+
+            (ColliderShape::Hull(h1), ColliderShape::Hull(h2)) => {
+                // TODO
+                gjk::closest(h1, a_iso, h2, b_iso, Some(&mut gizmos))
             }
             // (ColliderShape::Sphere(s), ColliderShape::Capsule(c)) => {
             //     contact_sphere_capsule(s, &a_iso, c, &b_iso)
@@ -270,8 +285,6 @@ fn update_closest_points(
             // _ => continue,
         };
 
-        bevy::log::info!("on_a = {on_a} | on_b = {on_b}");
-
         let mut a_xf = vis.get_mut(closest_vis.a_vis).unwrap();
         a_xf.translation = on_a.into();
         let mut b_xf = vis.get_mut(closest_vis.b_vis).unwrap();
@@ -282,9 +295,9 @@ fn update_closest_points(
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ShapeSel {
     Sphere,
+    Hull,
     // Box,
     // Capsule,
-    // Polyhedron,
 }
 
 fn label_slider<N: emath::Numeric>(
@@ -324,6 +337,7 @@ fn render_ui(
 
     let mut shape_sel = match obj.shape {
         ColliderShape::Sphere(_) => ShapeSel::Sphere,
+        ColliderShape::Hull(_) => ShapeSel::Hull,
         // ColliderShape::Cuboid(_) => ShapeSel::Box,
         // ColliderShape::Capsule(_) => ShapeSel::Capsule,
         // ColliderShape::Polyhedron(_) => ShapeSel::Polyhedron,
@@ -334,9 +348,9 @@ fn render_ui(
             .selected_text(format!("{shape_sel:?}"))
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut shape_sel, ShapeSel::Sphere, "Sphere");
+                ui.selectable_value(&mut shape_sel, ShapeSel::Hull, "Hull");
                 // ui.selectable_value(&mut shape_sel, ShapeSel::Box, "Box");
                 // ui.selectable_value(&mut shape_sel, ShapeSel::Capsule, "Capsule");
-                // ui.selectable_value(&mut shape_sel, ShapeSel::Polyhedron, "Polyhedron");
             });
 
         ui.separator();
@@ -358,32 +372,31 @@ fn render_ui(
                     });
                 }
             } // ShapeSel::Box => {
-              //     if !matches!(&obj.shape, ColliderShape::Cuboid(_)) {
-              //         obj.shape = ColliderShape::Cuboid(Obb {
-              //             world_center: Vec3::ZERO,
-              //             local_to_world: Mat3::IDENTITY,
-              //             half_extents: Vec3::splat(1.0),
-              //         });
-              //     }
-              // }
+            //     if !matches!(&obj.shape, ColliderShape::Cuboid(_)) {
+            //         obj.shape = ColliderShape::Cuboid(Obb {
+            //             world_center: Vec3::ZERO,
+            //             local_to_world: Mat3::IDENTITY,
+            //             half_extents: Vec3::splat(1.0),
+            //         });
+            //     }
+            // }
 
-              // ShapeSel::Capsule => {
-              //     if !matches!(&obj.shape, ColliderShape::Capsule(_)) {
-              //         obj.shape = ColliderShape::Capsule(Capsule {
-              //             segment: Segment {
-              //                 a: 0.5 * Vec3::Y,
-              //                 b: -0.5 * Vec3::Y,
-              //             },
-              //             radius: 0.5,
-              //         });
-              //     }
-              // }
-
-              // ShapeSel::Polyhedron => {
-              //     if !matches!(&obj.shape, ColliderShape::Polyhedron(_)) {
-              //         obj.shape = ColliderShape::Polyhedron(ConvexPolyhedron::dodecahedron());
-              //     }
-              // }
+            // ShapeSel::Capsule => {
+            //     if !matches!(&obj.shape, ColliderShape::Capsule(_)) {
+            //         obj.shape = ColliderShape::Capsule(Capsule {
+            //             segment: Segment {
+            //                 a: 0.5 * Vec3::Y,
+            //                 b: -0.5 * Vec3::Y,
+            //             },
+            //             radius: 0.5,
+            //         });
+            //     }
+            // }
+            ShapeSel::Hull => {
+                if !matches!(&obj.shape, ColliderShape::Hull(_)) {
+                    obj.shape = ColliderShape::Hull(Hull::tetrahedron());
+                }
+            }
         }
     });
 }

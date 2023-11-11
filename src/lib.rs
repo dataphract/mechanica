@@ -8,15 +8,17 @@ use crate::{aabb::Aabb, glam_ext::Mat3Ext};
 pub mod aabb;
 pub mod aabb_tree;
 pub mod bevy_;
+pub mod gauss;
 pub mod gjk;
 mod glam_ext;
+pub mod hull;
 pub mod list;
 pub mod mesh_edit;
 pub mod nmesh;
 pub mod polyhedron;
 
 /// An isometry, or rigid transformation.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct Isometry {
     pub rotation: Quat,
     pub translation: Vec3,

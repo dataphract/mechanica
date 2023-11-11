@@ -2,9 +2,9 @@ use bevy::prelude::{Color, Gizmos};
 /// The Gilbert-Johnson-Keerthi least distance algorithm.
 // Implementation based on "A Fast and Robust GJK Implementation for Collision Detection of Convex
 // Objects" by Gino van den Bergen (https://doi.org/10.1080/10867651.1999.10487502).
-use glam::{Vec3, Vec3A};
+use glam::{Quat, Vec3, Vec3A};
 
-use crate::{Isometry, Segment, Sphere};
+use crate::{hull::Hull, Isometry, Segment, Sphere};
 
 /// A trait for types which can compute supporting points in a given direction.
 pub trait Support {
@@ -91,6 +91,12 @@ impl Support for Segment {
     }
 }
 
+impl Support for Hull {
+    fn local_support(&self, dir: Vec3A) -> Vec3A {
+        self.compute_supporting_point(dir)
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 struct LowerBound(f32);
 
@@ -116,7 +122,7 @@ pub fn closest<T, U>(
     iso_a: Isometry,
     obj_b: &U,
     iso_b: Isometry,
-    gizmos: &mut Gizmos,
+    mut gizmos: Option<&mut Gizmos>,
 ) -> (Vec3A, Vec3A)
 where
     T: Support,
@@ -126,10 +132,12 @@ where
 
     // Assuming units are in meters, this terminates the loop if objects are within one micrometer
     // of each other.
-    const ABS_ERROR: f32 = 1.0e-6;
+    const ABS_ERROR: f32 = 1.0e-10;
 
     let mut points_a = [Vec3A::ZERO; 4];
     let mut points_b = [Vec3A::ZERO; 4];
+
+    println!("==============================================================");
 
     // Initialize v with an arbitrary support point on the Minkowski difference.
     let init_a = obj_a.support(iso_a, Vec3A::X);
@@ -142,7 +150,10 @@ where
 
     let mut simplex = Simplex::new();
 
+    let mut hue = 0.0;
     while simplex.bits < 0b1111 && dist > ABS_ERROR {
+        hue += 16.0;
+
         // Compute the support point on the Minkowski difference.
         let point_a = obj_a.support(iso_a, -v);
         println!("point_a = {point_a:?}");
@@ -151,7 +162,31 @@ where
         let new_point = point_a - point_b;
         println!("v = {v:?}");
         println!("new_point = {new_point:?}");
-        gizmos.line(point_a.into(), point_b.into(), Color::RED);
+        if let Some(g) = gizmos.as_mut() {
+            g.sphere(
+                point_a.into(),
+                Quat::IDENTITY,
+                0.05,
+                Color::Hsla {
+                    hue,
+                    saturation: 1.0,
+                    lightness: 0.5,
+                    alpha: 1.0,
+                },
+            );
+            g.sphere(
+                point_b.into(),
+                Quat::IDENTITY,
+                0.05,
+                Color::Hsla {
+                    hue,
+                    saturation: 1.0,
+                    lightness: 0.5,
+                    alpha: 1.0,
+                },
+            );
+            // g.line(point_a.into(), point_b.into(), Color::RED);
+        }
 
         // Update the lower bound.
         dist_lower_bound.update(v.dot(new_point) / v.length());
@@ -176,6 +211,7 @@ where
         let Some(closest) = simplex.find_closest() else {
             break;
         };
+        println!("simplex dim: {}", simplex.bits.count_ones());
 
         v = closest;
         dist = v.length();
@@ -191,13 +227,16 @@ where
         }
 
         let d = simplex.det[simplex.bits as usize][i];
-        println!("d = {d}");
+        println!("b{i} = {d}");
         bary_sum += d;
-        point_a += points_a[i];
-        point_b += points_b[i];
+        point_a += d * points_a[i];
+        point_b += d * points_b[i];
     }
     assert!(point_a.is_finite());
     assert!(point_b.is_finite());
+
+    println!("point_a = {point_a}");
+    println!("point_b = {point_b}");
 
     let bary_denom = bary_sum.recip();
     println!("bary_denom = {bary_denom}");
@@ -316,10 +355,15 @@ impl Simplex {
             }
 
             let d = points[i].dot(points[new_idx]);
+            println!("dot[{new_idx}][{i}] = {d}");
             self.dot[new_idx][i] = d;
             self.dot[i][new_idx] = d;
         }
 
+        println!(
+            "dot[{new_idx}][{new_idx}] = {}",
+            points[new_idx].dot(points[new_idx])
+        );
         self.dot[new_idx][new_idx] = points[new_idx].dot(points[new_idx]);
 
         // Recompute the determinant for `new_bits`. This requires recomputing the determinant for
@@ -331,7 +375,15 @@ impl Simplex {
             let b2 = (1 << q) | new_bit as usize;
 
             // Recompute determinants for updated 1-simplices.
+            println!(
+                "self.det[{b2:04b}][{q}] = {}",
+                self.dot[new_idx][new_idx] - self.dot[new_idx][q]
+            );
             self.det[b2][q] = self.dot[new_idx][new_idx] - self.dot[new_idx][q];
+            println!(
+                "self.det[{b2:04b}][{new_idx}] = {}",
+                self.dot[q][q] - self.dot[q][new_idx]
+            );
             self.det[b2][new_idx] = self.dot[q][q] - self.dot[q][new_idx];
 
             for p in (0..q).filter(bit_was_set) {
@@ -409,8 +461,12 @@ impl Simplex {
             let bit_included = sub_bits & bit != 0;
             let det_positive = self.det[(sub_bits | bit) as usize][i] > 0.0;
 
-            println!("(1 << {i}: bit_included = {bit_included}");
-            println!("(1 << {i}: det_positive = {det_positive}");
+            println!(
+                "----\n1 << {i}: det = {}",
+                self.det[(sub_bits | bit) as usize][i]
+            );
+            println!("1 << {i}: bit_included = {bit_included}");
+            println!("1 << {i}: det_positive = {det_positive}");
 
             if bit_included != det_positive {
                 return false;
