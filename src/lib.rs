@@ -8,6 +8,7 @@ use crate::{aabb::Aabb, glam_ext::Mat3Ext};
 pub mod aabb;
 pub mod aabb_tree;
 pub mod bevy_;
+pub mod closest;
 pub mod gauss;
 pub mod gjk;
 mod glam_ext;
@@ -179,6 +180,10 @@ pub struct SegmentClosestPair {
 }
 
 impl Segment {
+    pub fn new(a: Vec3, b: Vec3) -> Segment {
+        Segment { a, b }
+    }
+
     fn barycentric_origin(&self) -> [f32; 2] {
         let ab = self.b - self.a;
         let denom = ab.length_squared();
@@ -419,6 +424,25 @@ impl Sphere {
     pub fn intersects_aabb(&self, aabb: &Aabb) -> bool {
         // Closest point to sphere center which is contained by AABB is also contained by sphere.
         self.contains_point(aabb.closest_point_to(self.center))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Capsule {
+    pub segment: Segment,
+    pub radius: f32,
+}
+
+impl Capsule {
+    pub fn intersects_sphere(&self, sphere: &Sphere) -> bool {
+        let closest = self.segment.closest_point_to_point(sphere.center);
+        (sphere.center - closest.point).length_squared() <= self.radius.powi(2)
+    }
+
+    pub fn intersects_capsule(&self, other: &Capsule) -> bool {
+        let closest = self.segment.closest_point_to_segment(&other.segment);
+        let radius = self.radius + other.radius;
+        closest.distance_squared < radius * radius
     }
 }
 

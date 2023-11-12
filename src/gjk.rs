@@ -1,100 +1,104 @@
-use bevy::prelude::{Color, Gizmos};
 /// The Gilbert-Johnson-Keerthi least distance algorithm.
+//
 // Implementation based on "A Fast and Robust GJK Implementation for Collision Detection of Convex
 // Objects" by Gino van den Bergen (https://doi.org/10.1080/10867651.1999.10487502).
-use glam::{Quat, Vec3, Vec3A};
+//
+use glam::{Vec3, Vec3A};
 
 use crate::{hull::Hull, Isometry, Segment, Sphere};
 
-/// A trait for types which can compute supporting points in a given direction.
-pub trait Support {
-    /// Computes the supporting point of this convex set in the direction given by `dir`.
-    fn local_support(&self, dir: Vec3A) -> Vec3A;
+pub fn closest<T, U>(
+    obj_a: &T,
+    iso_a: Isometry,
+    obj_b: &U,
+    iso_b: Isometry,
+) -> Option<(Vec3A, Vec3A)>
+where
+    T: Support,
+    U: Support,
+{
+    const REL_ERROR: f32 = 1.0e-6;
 
-    /// Computes the supporting point of this convex set, transformed by `transform`, in the direction
-    /// given by `dir`.
-    ///
-    /// The default implementation rotates `dir` by the inverse of `transform.rotation`, then calls
-    /// `local_support`, and finally applies `transform` to the local support point.
-    #[inline]
-    fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
-        let Isometry {
-            rotation,
-            translation,
-        } = transform;
-        Vec3A::from(translation) + rotation * self.local_support(rotation.inverse() * dir)
-    }
-}
+    // Assuming units are in meters, this terminates the loop if
+    // of each other.
+    const ABS_ERROR: f32 = 1.0e-6;
 
-impl Support for Vec3A {
-    #[inline]
-    fn local_support(&self, _dir: Vec3A) -> Vec3A {
-        *self
-    }
+    let mut points_a = [Vec3A::ZERO; 4];
+    let mut points_b = [Vec3A::ZERO; 4];
 
-    #[inline]
-    fn support(&self, transform: Isometry, _dir: Vec3A) -> Vec3A {
-        *self + Vec3A::from(transform.translation)
-    }
-}
+    // Initialize v with an arbitrary support point on the Minkowski difference.
+    let init_a = obj_a.support(iso_a, Vec3A::X);
+    let init_b = obj_b.support(iso_b, -Vec3A::X);
+    let mut v = init_a - init_b;
+    let mut dist = v.length();
+    let mut dist_lower_bound = LowerBound::new();
 
-impl Support for Vec3 {
-    #[inline]
-    fn local_support(&self, dir: Vec3A) -> Vec3A {
-        Vec3A::from(*self).local_support(dir)
-    }
+    let mut simplex = Simplex::new();
 
-    #[inline]
-    fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
-        Vec3A::from(*self).support(transform, dir)
-    }
-}
+    while simplex.bits < 0b1111 && dist > ABS_ERROR {
+        // Compute the support point on the Minkowski difference.
+        let point_a = obj_a.support(iso_a, -v);
+        let point_b = obj_b.support(iso_b, v);
+        let new_point = point_a - point_b;
 
-impl Support for Sphere {
-    #[inline]
-    fn local_support(&self, dir: Vec3A) -> Vec3A {
-        Vec3A::from(self.center) + self.radius * dir.normalize()
-    }
-
-    #[inline]
-    fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
-        // Invariant to rotation.
-        let center = Vec3A::from(self.center);
-        let trans = Vec3A::from(transform.translation);
-        trans + center + self.radius * dir.normalize()
-    }
-}
-
-impl Support for Segment {
-    fn local_support(&self, dir: Vec3A) -> Vec3A {
-        let a = Vec3A::from(self.a);
-        let b = Vec3A::from(self.b);
-        let ab = b - a;
-
-        if ab.dot(dir) < 0.0 {
-            a
-        } else {
-            b
+        if simplex.bits > 0 {
+            // Update the lower bound.
+            dist_lower_bound.update(v.dot(new_point) / v.length());
         }
-    }
 
-    fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
-        let a = transform * Vec3A::from(self.a);
-        let b = transform * Vec3A::from(self.b);
-        let ab = b - a;
-
-        if ab.dot(dir) < 0.0 {
-            a
-        } else {
-            b
+        // If the previous distance is less than the lower bound, terminate.
+        if dist - dist_lower_bound.get() <= dist * REL_ERROR {
+            break;
         }
-    }
-}
 
-impl Support for Hull {
-    fn local_support(&self, dir: Vec3A) -> Vec3A {
-        self.compute_supporting_point(dir)
+        if simplex.insert(new_point).is_err() {
+            break;
+        }
+
+        points_a[simplex.new_idx as usize] = point_a;
+        points_b[simplex.new_idx as usize] = point_b;
+
+        let Some(closest) = simplex.find_closest() else {
+            break;
+        };
+
+        v = closest;
+        dist = v.length();
     }
+
+    if simplex.bits == 0b1111 {
+        return None;
+    }
+
+    assert_ne!(simplex.bits, 0);
+
+    let mut bary_sum = 0.0;
+    let mut point_a = Vec3A::ZERO;
+    let mut point_b = Vec3A::ZERO;
+    for i in 0..4 {
+        let bit = 1 << i;
+        if simplex.bits & bit == 0 {
+            continue;
+        }
+
+        let d = simplex.det[simplex.bits as usize][i];
+        println!("{i}: d = {d}");
+        bary_sum += d;
+        point_a += d * points_a[i];
+        point_b += d * points_b[i];
+    }
+    assert!(point_a.is_finite());
+    assert!(point_b.is_finite());
+
+    let bary_denom = bary_sum.recip();
+    assert!(bary_denom.is_normal());
+    point_a *= bary_denom;
+    point_b *= bary_denom;
+
+    assert!(point_a.is_finite());
+    assert!(point_b.is_finite());
+
+    Some((point_a, point_b))
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -115,139 +119,6 @@ impl LowerBound {
     fn update(&mut self, delta: f32) {
         self.0 = delta.max(self.0)
     }
-}
-
-pub fn closest<T, U>(
-    obj_a: &T,
-    iso_a: Isometry,
-    obj_b: &U,
-    iso_b: Isometry,
-    mut gizmos: Option<&mut Gizmos>,
-) -> (Vec3A, Vec3A)
-where
-    T: Support,
-    U: Support,
-{
-    const REL_ERROR: f32 = 1.0e-6;
-
-    // Assuming units are in meters, this terminates the loop if objects are within one micrometer
-    // of each other.
-    const ABS_ERROR: f32 = 1.0e-10;
-
-    let mut points_a = [Vec3A::ZERO; 4];
-    let mut points_b = [Vec3A::ZERO; 4];
-
-    println!("==============================================================");
-
-    // Initialize v with an arbitrary support point on the Minkowski difference.
-    let init_a = obj_a.support(iso_a, Vec3A::X);
-    println!("init_a = {init_a}");
-    let init_b = obj_b.support(iso_b, -Vec3A::X);
-    println!("init_b = {init_b}");
-    let mut v = init_a - init_b;
-    let mut dist = v.length();
-    let mut dist_lower_bound = LowerBound::new();
-
-    let mut simplex = Simplex::new();
-
-    let mut hue = 0.0;
-    while simplex.bits < 0b1111 && dist > ABS_ERROR {
-        hue += 16.0;
-
-        // Compute the support point on the Minkowski difference.
-        let point_a = obj_a.support(iso_a, -v);
-        println!("point_a = {point_a:?}");
-        let point_b = obj_b.support(iso_b, v);
-        println!("point_b = {point_b:?}");
-        let new_point = point_a - point_b;
-        println!("v = {v:?}");
-        println!("new_point = {new_point:?}");
-        if let Some(g) = gizmos.as_mut() {
-            g.sphere(
-                point_a.into(),
-                Quat::IDENTITY,
-                0.05,
-                Color::Hsla {
-                    hue,
-                    saturation: 1.0,
-                    lightness: 0.5,
-                    alpha: 1.0,
-                },
-            );
-            g.sphere(
-                point_b.into(),
-                Quat::IDENTITY,
-                0.05,
-                Color::Hsla {
-                    hue,
-                    saturation: 1.0,
-                    lightness: 0.5,
-                    alpha: 1.0,
-                },
-            );
-            // g.line(point_a.into(), point_b.into(), Color::RED);
-        }
-
-        // Update the lower bound.
-        dist_lower_bound.update(v.dot(new_point) / v.length());
-
-        // If the previous distance is less than the lower bound, terminate.
-        if dist - dist_lower_bound.get() <= dist * REL_ERROR {
-            println!(
-                "terminating on lower bound: {} <= {}",
-                dist - dist_lower_bound.get(),
-                dist * REL_ERROR
-            );
-            break;
-        }
-
-        if simplex.insert(new_point).is_err() {
-            break;
-        }
-
-        points_a[simplex.new_idx as usize] = point_a;
-        points_b[simplex.new_idx as usize] = point_b;
-
-        let Some(closest) = simplex.find_closest() else {
-            break;
-        };
-        println!("simplex dim: {}", simplex.bits.count_ones());
-
-        v = closest;
-        dist = v.length();
-    }
-
-    let mut bary_sum = 0.0;
-    let mut point_a = Vec3A::ZERO;
-    let mut point_b = Vec3A::ZERO;
-    for i in 0..4 {
-        let bit = 1 << i;
-        if simplex.bits & bit == 0 {
-            continue;
-        }
-
-        let d = simplex.det[simplex.bits as usize][i];
-        println!("b{i} = {d}");
-        bary_sum += d;
-        point_a += d * points_a[i];
-        point_b += d * points_b[i];
-    }
-    assert!(point_a.is_finite());
-    assert!(point_b.is_finite());
-
-    println!("point_a = {point_a}");
-    println!("point_b = {point_b}");
-
-    let bary_denom = bary_sum.recip();
-    println!("bary_denom = {bary_denom}");
-    assert!(bary_denom.is_normal());
-    point_a *= bary_denom;
-    point_b *= bary_denom;
-
-    assert!(point_a.is_finite());
-    assert!(point_b.is_finite());
-
-    (point_a, point_b)
 }
 
 // Memoization table for determinant calculations.
@@ -355,15 +226,10 @@ impl Simplex {
             }
 
             let d = points[i].dot(points[new_idx]);
-            println!("dot[{new_idx}][{i}] = {d}");
             self.dot[new_idx][i] = d;
             self.dot[i][new_idx] = d;
         }
 
-        println!(
-            "dot[{new_idx}][{new_idx}] = {}",
-            points[new_idx].dot(points[new_idx])
-        );
         self.dot[new_idx][new_idx] = points[new_idx].dot(points[new_idx]);
 
         // Recompute the determinant for `new_bits`. This requires recomputing the determinant for
@@ -375,15 +241,7 @@ impl Simplex {
             let b2 = (1 << q) | new_bit as usize;
 
             // Recompute determinants for updated 1-simplices.
-            println!(
-                "self.det[{b2:04b}][{q}] = {}",
-                self.dot[new_idx][new_idx] - self.dot[new_idx][q]
-            );
             self.det[b2][q] = self.dot[new_idx][new_idx] - self.dot[new_idx][q];
-            println!(
-                "self.det[{b2:04b}][{new_idx}] = {}",
-                self.dot[q][q] - self.dot[q][new_idx]
-            );
             self.det[b2][new_idx] = self.dot[q][q] - self.dot[q][new_idx];
 
             for p in (0..q).filter(bit_was_set) {
@@ -411,7 +269,6 @@ impl Simplex {
                 continue;
             }
 
-            println!("test sub_bits = {sub_bits:b}");
             if self.is_valid_solution(sub_bits | self.new_bit) {
                 self.bits = sub_bits | self.new_bit;
 
@@ -450,7 +307,6 @@ impl Simplex {
         let all_bits = self.bits;
         debug_assert_eq!(all_bits & sub_bits, sub_bits);
 
-        println!("sub_bits = 0b{sub_bits:04b}");
         for i in 0..4 {
             let bit = 1 << i;
 
@@ -461,13 +317,6 @@ impl Simplex {
             let bit_included = sub_bits & bit != 0;
             let det_positive = self.det[(sub_bits | bit) as usize][i] > 0.0;
 
-            println!(
-                "----\n1 << {i}: det = {}",
-                self.det[(sub_bits | bit) as usize][i]
-            );
-            println!("1 << {i}: bit_included = {bit_included}");
-            println!("1 << {i}: det_positive = {det_positive}");
-
             if bit_included != det_positive {
                 return false;
             }
@@ -477,20 +326,96 @@ impl Simplex {
     }
 }
 
-// van den Bergen notes
-//
-// - A: first convex object
-// - B: second convex object
-// - δ_k: signed distance from origin to supporting plane, (v_k · w_k) / mag(v_k)
-// - Δ(X): determinant of X, used in calculation of λ via Cramer's rule
-// - ɛ: absolute error tolerance
-// - I_X: set of indices which gives X ⊆ Y s.t. X = {Y[i] : i ∈ I_X}.
-// - λ_k: barycentric coordinate vector at kth iteration
-// - μ_k: corrected lower bound at kth iteration, max(0, δ_0, ... , δ_k)
-// - v(A - B): point closest to origin in A - B
-// - v_k: point in W_k closest to origin
-// - W_k: simplex at kth iteration
-// - X: subset of W whose convex hull contains v
+/// A trait for types which can compute supporting points in a given direction.
+pub trait Support {
+    /// Computes the supporting point of this convex set in the direction given by `dir`.
+    fn local_support(&self, dir: Vec3A) -> Vec3A;
+
+    /// Computes the supporting point of this convex set, transformed by `transform`, in the direction
+    /// given by `dir`.
+    ///
+    /// The default implementation rotates `dir` by the inverse of `transform.rotation`, then calls
+    /// `local_support`, and finally applies `transform` to the local support point.
+    #[inline]
+    fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
+        let Isometry {
+            rotation,
+            translation,
+        } = transform;
+        Vec3A::from(translation) + rotation * self.local_support(rotation.inverse() * dir)
+    }
+}
+
+impl Support for Vec3A {
+    #[inline]
+    fn local_support(&self, _dir: Vec3A) -> Vec3A {
+        *self
+    }
+
+    #[inline]
+    fn support(&self, transform: Isometry, _dir: Vec3A) -> Vec3A {
+        *self + Vec3A::from(transform.translation)
+    }
+}
+
+impl Support for Vec3 {
+    #[inline]
+    fn local_support(&self, dir: Vec3A) -> Vec3A {
+        Vec3A::from(*self).local_support(dir)
+    }
+
+    #[inline]
+    fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
+        Vec3A::from(*self).support(transform, dir)
+    }
+}
+
+impl Support for Sphere {
+    #[inline]
+    fn local_support(&self, dir: Vec3A) -> Vec3A {
+        Vec3A::from(self.center) + self.radius * dir.normalize()
+    }
+
+    #[inline]
+    fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
+        // Invariant to rotation.
+        let center = Vec3A::from(self.center);
+        let trans = Vec3A::from(transform.translation);
+        trans + center + self.radius * dir.normalize()
+    }
+}
+
+impl Support for Segment {
+    fn local_support(&self, dir: Vec3A) -> Vec3A {
+        let a = Vec3A::from(self.a);
+        let b = Vec3A::from(self.b);
+        let ab = b - a;
+
+        if ab.dot(dir) < 0.0 {
+            a
+        } else {
+            b
+        }
+    }
+
+    fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
+        let a = transform * Vec3A::from(self.a);
+        let b = transform * Vec3A::from(self.b);
+        let ab = b - a;
+
+        if ab.dot(dir) < 0.0 {
+            a
+        } else {
+            b
+        }
+    }
+}
+
+impl Support for Hull {
+    fn local_support(&self, dir: Vec3A) -> Vec3A {
+        self.compute_supporting_point(dir)
+    }
+}
 
 #[cfg(test)]
 mod tests {

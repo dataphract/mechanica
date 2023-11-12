@@ -13,7 +13,14 @@ use bevy_egui::{
 use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
 use bevy_mod_picking::{prelude::*, PickableBundle};
 use bevy_transform_gizmo::{GizmoPickSource, GizmoTransformable};
-use cg3::{gjk, hull::Hull, Isometry, Sphere};
+use cg3::{
+    closest::{
+        closest_capsule_capsule, closest_capsule_hull, closest_capsule_sphere, closest_hull_hull,
+        closest_hull_sphere, closest_sphere_sphere,
+    },
+    hull::Hull,
+    Capsule, Isometry, Segment, Sphere,
+};
 
 fn main() {
     App::new()
@@ -40,6 +47,7 @@ struct Collider {
 #[derive(Clone)]
 enum ColliderShape {
     Sphere(Sphere),
+    Capsule(Capsule),
     Hull(Hull),
 }
 
@@ -113,18 +121,18 @@ fn mesh_for_collider(collider: &ColliderShape) -> Mesh {
         //     let extents = 2.0 * c.half_extents;
         //     shape::Box::new(extents.x, extents.y, extents.z).into()
         // }
-        // ColliderShape::Capsule(c) => {
-        //     let ab = c.segment.b - c.segment.a;
-        //     assert_eq!(ab.x, 0.0);
-        //     assert_eq!(ab.z, 0.0);
+        ColliderShape::Capsule(c) => {
+            let ab = c.segment.b - c.segment.a;
+            assert_eq!(ab.x, 0.0);
+            assert_eq!(ab.z, 0.0);
 
-        //     shape::Capsule {
-        //         radius: c.radius,
-        //         depth: ab.y.abs(),
-        //         ..default()
-        //     }
-        //     .into()
-        // }
+            shape::Capsule {
+                radius: c.radius,
+                depth: ab.y.abs(),
+                ..default()
+            }
+            .into()
+        }
         ColliderShape::Hull(h) => h.to_mesh(),
     }
 }
@@ -213,7 +221,6 @@ fn update_closest_points(
     query: Query<(&ClosestPoints, &ClosestPointsVis)>,
     objs: Query<(&PhysObj, &Transform), Without<VisTag>>,
     mut vis: Query<&mut Transform, With<VisTag>>,
-    mut gizmos: Gizmos,
 ) {
     for (closest, closest_vis) in query.iter() {
         let (a_obj, a_xf) = objs.get(closest.a).unwrap();
@@ -221,83 +228,61 @@ fn update_closest_points(
         let a_iso = Isometry::from_transform(*a_xf);
         let b_iso = Isometry::from_transform(*b_xf);
 
-        let (on_a, on_b) = match (&a_obj.shape, &b_obj.shape) {
-            (ColliderShape::Sphere(s1), ColliderShape::Sphere(s2)) => {
-                gjk::closest(s1, a_iso, s2, b_iso, Some(&mut gizmos))
+        let opt_points = match (&a_obj.shape, &b_obj.shape) {
+            (ColliderShape::Capsule(c1), ColliderShape::Capsule(c2)) => {
+                closest_capsule_capsule(c1, a_iso, c2, b_iso)
             }
 
-            (ColliderShape::Sphere(s), ColliderShape::Hull(h)) => {
-                // TODO
-                gjk::closest(s, a_iso, h, b_iso, Some(&mut gizmos))
+            (ColliderShape::Capsule(c), ColliderShape::Hull(h)) => {
+                closest_capsule_hull(c, a_iso, h, b_iso)
+            }
+
+            (ColliderShape::Hull(h), ColliderShape::Capsule(c)) => {
+                closest_capsule_hull(c, b_iso, h, a_iso).map(|(b, a)| (a, b))
+            }
+
+            (ColliderShape::Sphere(s1), ColliderShape::Sphere(s2)) => {
+                closest_sphere_sphere(s1, a_iso, s2, b_iso)
+            }
+
+            (ColliderShape::Capsule(c), ColliderShape::Sphere(s)) => {
+                closest_capsule_sphere(c, a_iso, s, b_iso)
+            }
+
+            (ColliderShape::Sphere(s), ColliderShape::Capsule(c)) => {
+                closest_capsule_sphere(c, b_iso, s, a_iso).map(|(b, a)| (a, b))
             }
 
             (ColliderShape::Hull(h), ColliderShape::Sphere(s)) => {
-                gjk::closest(h, a_iso, s, b_iso, Some(&mut gizmos))
+                closest_hull_sphere(h, a_iso, s, b_iso)
+            }
+
+            (ColliderShape::Sphere(s), ColliderShape::Hull(h)) => {
+                closest_hull_sphere(h, b_iso, s, a_iso).map(|(b, a)| (a, b))
             }
 
             (ColliderShape::Hull(h1), ColliderShape::Hull(h2)) => {
-                // TODO
-                gjk::closest(h1, a_iso, h2, b_iso, Some(&mut gizmos))
+                closest_hull_hull(h1, a_iso, h2, b_iso)
             }
-            // (ColliderShape::Sphere(s), ColliderShape::Capsule(c)) => {
-            //     contact_sphere_capsule(s, &a_iso, c, &b_iso)
-            // }
-            // (ColliderShape::Capsule(c), ColliderShape::Sphere(s)) => {
-            //     contact_sphere_capsule(s, &b_iso, c, &a_iso)
-            // }
-            // (ColliderShape::Capsule(c1), ColliderShape::Capsule(c2)) => {
-            //     contact_capsule_capsule(c1, &a_iso, c2, &b_iso)
-            // }
-            // (ColliderShape::Cuboid(c1), ColliderShape::Cuboid(c2)) => {
-            //     let (soln, trace) = gjk(c1, a_iso, c2, b_iso);
+        };
 
-            //     let mut emit_trace = false;
-
-            //     for _ in trace_events.iter() {
-            //         emit_trace = true;
-            //     }
-
-            //     if emit_trace {
-            //         println!("{}", serde_json::to_string_pretty(&trace).unwrap());
-            //     }
-
-            //     match soln {
-            //         GjkTermination::Intersecting(_) => {}
-
-            //         GjkTermination::Nonintersecting(s) => {
-            //             let mut a_acc = Vec3A::ZERO;
-            //             let mut b_acc = Vec3A::ZERO;
-            //             for i in 0..s.len as usize {
-            //                 a_acc += s.barycentric[i] * c1.support(a_iso, s.directions[i]);
-            //                 b_acc += s.barycentric[i] * c2.support(b_iso, -s.directions[i]);
-            //             }
-
-            //             let mut a_xf = vis.get_mut(closest_vis.a_vis).unwrap();
-            //             a_xf.translation = a_acc.into();
-            //             let mut b_xf = vis.get_mut(closest_vis.b_vis).unwrap();
-            //             b_xf.translation = b_acc.into();
-            //             //println!("distance: {distance}");
-            //         }
-            //     };
-            //     continue;
-            // }
-            // TODO
-            // _ => continue,
+        let Some((on_a, on_b)) = opt_points else {
+            continue;
         };
 
         let mut a_xf = vis.get_mut(closest_vis.a_vis).unwrap();
-        a_xf.translation = on_a.into();
+        a_xf.translation = on_a;
         let mut b_xf = vis.get_mut(closest_vis.b_vis).unwrap();
-        b_xf.translation = on_b.into();
+        b_xf.translation = on_b;
     }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ShapeSel {
     Sphere,
+    Capsule,
     Hull,
     // Box,
-    // Capsule,
 }
 
 fn label_slider<N: emath::Numeric>(
@@ -337,9 +322,9 @@ fn render_ui(
 
     let mut shape_sel = match obj.shape {
         ColliderShape::Sphere(_) => ShapeSel::Sphere,
+        ColliderShape::Capsule(_) => ShapeSel::Capsule,
         ColliderShape::Hull(_) => ShapeSel::Hull,
         // ColliderShape::Cuboid(_) => ShapeSel::Box,
-        // ColliderShape::Capsule(_) => ShapeSel::Capsule,
         // ColliderShape::Polyhedron(_) => ShapeSel::Polyhedron,
     };
 
@@ -348,9 +333,9 @@ fn render_ui(
             .selected_text(format!("{shape_sel:?}"))
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut shape_sel, ShapeSel::Sphere, "Sphere");
+                ui.selectable_value(&mut shape_sel, ShapeSel::Capsule, "Capsule");
                 ui.selectable_value(&mut shape_sel, ShapeSel::Hull, "Hull");
                 // ui.selectable_value(&mut shape_sel, ShapeSel::Box, "Box");
-                // ui.selectable_value(&mut shape_sel, ShapeSel::Capsule, "Capsule");
             });
 
         ui.separator();
@@ -380,18 +365,18 @@ fn render_ui(
             //         });
             //     }
             // }
+            ShapeSel::Capsule => {
+                if !matches!(&obj.shape, ColliderShape::Capsule(_)) {
+                    obj.shape = ColliderShape::Capsule(Capsule {
+                        segment: Segment {
+                            a: 0.5 * Vec3::Y,
+                            b: -0.5 * Vec3::Y,
+                        },
+                        radius: 0.5,
+                    });
+                }
+            }
 
-            // ShapeSel::Capsule => {
-            //     if !matches!(&obj.shape, ColliderShape::Capsule(_)) {
-            //         obj.shape = ColliderShape::Capsule(Capsule {
-            //             segment: Segment {
-            //                 a: 0.5 * Vec3::Y,
-            //                 b: -0.5 * Vec3::Y,
-            //             },
-            //             radius: 0.5,
-            //         });
-            //     }
-            // }
             ShapeSel::Hull => {
                 if !matches!(&obj.shape, ColliderShape::Hull(_)) {
                     obj.shape = ColliderShape::Hull(Hull::tetrahedron());
