@@ -1,22 +1,27 @@
+//! A computational geometry library for 3D applications.
+
 use std::{cmp::Ordering, ops::Mul};
 
 use bevy::prelude::Transform;
 use glam::{Mat3, Mat4, Quat, Vec3, Vec3A};
 
-use crate::{aabb::Aabb, glam_ext::Mat3Ext};
+use crate::glam_ext::Mat3Ext;
 
-pub mod aabb;
-pub mod aabb_tree;
+mod aabb;
 pub mod bevy_;
+pub mod bvh;
 pub mod closest;
+pub mod collider;
+pub mod contact;
 pub mod gauss;
 pub mod gjk;
 mod glam_ext;
 pub mod hull;
-pub mod list;
 pub mod mesh_edit;
 pub mod nmesh;
-pub mod polyhedron;
+
+#[doc(inline)]
+pub use aabb::Aabb;
 
 /// An isometry, or rigid transformation.
 #[derive(Copy, Clone, Debug, Default)]
@@ -70,6 +75,7 @@ impl Mul<Vec3A> for Isometry {
     }
 }
 
+/// A ray.
 pub struct Ray {
     origin: Vec3,
     dir: Vec3,
@@ -78,8 +84,12 @@ pub struct Ray {
 impl Ray {
     /// Constructs a ray given its origin and direction.
     ///
-    /// Returns `None` if `dir` cannot be normalized.
+    /// Returns `None` if `origin` is not finite or `dir` cannot be normalized.
     pub fn new(origin: Vec3, dir: Vec3) -> Option<Ray> {
+        if !origin.is_finite() {
+            return None;
+        }
+
         Some(Ray {
             origin,
             dir: dir.try_normalize()?,
@@ -87,6 +97,7 @@ impl Ray {
     }
 
     /// Constructs a ray, assuming that the direction vector is normalized.
+    #[inline]
     pub(crate) fn new_unchecked(origin: Vec3, dir_normalized: Vec3) -> Ray {
         Ray {
             origin,
@@ -110,6 +121,7 @@ impl Ray {
         self.dir.dot(point - self.origin)
     }
 
+    /// Returns `true` _iff_ `self` intersects `sphere`.
     pub fn intersects_sphere(&self, sphere: &Sphere) -> bool {
         let t = self.project_point(sphere.center).max(0.0);
 
@@ -335,7 +347,7 @@ pub struct Plane {
 impl Plane {
     /// Constructs a plane given a plane normal and the magnitude of the projected origin.
     pub fn new(normal: Vec3, dist: f32) -> Option<Plane> {
-        if !dist.is_finite() {
+        if !dist.is_finite() || !normal.is_normalized() {
             return None;
         }
 
@@ -343,6 +355,15 @@ impl Plane {
             normal: normal.try_normalize()?,
             dist,
         })
+    }
+
+    /// Constructs a plane given a point on the plane and the plane normal.
+    pub fn from_point_normal(point: Vec3, normal: Vec3) -> Option<Plane> {
+        if !point.is_finite() || !normal.is_normalized() {
+            return None;
+        }
+
+        Plane::new(normal, point.dot(normal))
     }
 
     /// Signed distance between the plane and the given point.
@@ -427,6 +448,7 @@ impl Sphere {
     }
 }
 
+/// A capsule.
 #[derive(Clone, Debug)]
 pub struct Capsule {
     pub segment: Segment,

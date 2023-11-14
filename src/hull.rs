@@ -55,6 +55,7 @@ pub(crate) struct Edge {
     pub(crate) vertex: VertIdx,
 }
 
+/// A convex polyhedron.
 #[derive(Clone, Debug)]
 pub struct Hull {
     pub(crate) vertices: Vec<Vec3>,
@@ -111,7 +112,7 @@ impl Hull {
         }
     }
 
-    // TODO: consider using a Dobkin-Kirkpatrick hierarchy.
+    // TODO: consider building a Dobkin-Kirkpatrick hierarchy for large hulls.
     pub(crate) fn compute_supporting_point(&self, dir: Vec3A) -> Vec3A {
         let mut vid = VertIdx(0);
         'next_vert: loop {
@@ -174,6 +175,7 @@ impl Hull {
         mesh
     }
 
+    /// Constructs a regular tetrahedron with edge lengths of `1.0`.
     pub fn tetrahedron() -> Hull {
         // Top-down:
         //
@@ -437,7 +439,4 @@ impl Hull {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn asdf() {}
-}
+mod tests {}

@@ -51,7 +51,7 @@ impl IndexMut<Dir> for [NodeKey; 2] {
     }
 }
 
-/// A bounding-volume hierarchy implemented as an AABB tree.
+/// A dynamic bounding-volume hierarchy implemented as an AABB tree.
 #[derive(Default)]
 pub struct Bvh<T> {
     root: Option<NodeKey>,

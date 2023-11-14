@@ -1,5 +1,3 @@
-use std::cmp;
-
 use bevy::{
     ecs::system::SystemParam,
     input::mouse::{MouseMotion, MouseWheel},
@@ -21,7 +19,7 @@ fn main() {
         .add_plugins(InfiniteGridPlugin)
         .add_plugins(NMeshPlugins)
         .add_systems(Startup, setup)
-        .add_systems(Update, (control_camera))
+        .add_systems(Update, control_camera)
         .run();
 }
 
@@ -192,8 +190,4 @@ fn control_camera(
 
     let mut solid_light = solid_shading_light.get_single_mut().unwrap();
     *solid_light = Transform::from_rotation(transform.rotation);
-}
-
-fn draw_ui(mut contexts: EguiContexts) {
-    egui::Window::new("NMesh editor").show(contexts.ctx_mut(), |ui| {});
 }

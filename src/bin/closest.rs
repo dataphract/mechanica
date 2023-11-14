@@ -1,5 +1,6 @@
-use std::ops::RangeInclusive;
+use std::{iter, ops::RangeInclusive};
 
+use arrayvec::ArrayVec;
 use bevy::{
     ecs::system::SystemParam,
     input::mouse::{MouseMotion, MouseWheel},
@@ -15,9 +16,10 @@ use bevy_mod_picking::{prelude::*, PickableBundle};
 use bevy_transform_gizmo::{GizmoPickSource, GizmoTransformable};
 use cg3::{
     closest::{
-        closest_capsule_capsule, closest_capsule_hull, closest_capsule_sphere, closest_hull_hull,
-        closest_hull_sphere, closest_sphere_sphere,
+        closest_capsule_capsule, closest_capsule_hull, closest_hull_hull, closest_hull_sphere,
     },
+    collider::ColliderShape,
+    contact::{contact_capsule_capsule, contact_capsule_sphere, contact_sphere_sphere, Contact},
     hull::Hull,
     Capsule, Isometry, Segment, Sphere,
 };
@@ -31,24 +33,17 @@ fn main() {
         .add_plugins(bevy_transform_gizmo::TransformGizmoPlugin::default())
         .add_systems(Startup, spawn.chain())
         .add_systems(Update, init_physobj)
-        .add_systems(Update, init_closest_points)
+        .add_systems(Update, init_contact_vis)
         .add_systems(Update, control_camera)
         .add_systems(Update, render_ui)
         .add_systems(Update, update_physobj)
-        .add_systems(Update, update_closest_points)
+        .add_systems(Update, update_contact_vis)
         .run();
 }
 
 #[derive(Component)]
 struct Collider {
     shape: ColliderShape,
-}
-
-#[derive(Clone)]
-enum ColliderShape {
-    Sphere(Sphere),
-    Capsule(Capsule),
-    Hull(Hull),
 }
 
 fn spawn(mut commands: Commands) {
@@ -100,9 +95,10 @@ fn spawn(mut commands: Commands) {
         .insert(Transform::from_xyz(-2.0, 1.0, 0.0))
         .id();
 
-    commands
-        .spawn_empty()
-        .insert(ClosestPoints { a: obj1, b: obj2 });
+    commands.spawn_empty().insert(ContactPair {
+        on_a: obj1,
+        on_b: obj2,
+    });
 }
 
 #[derive(Component)]
@@ -117,10 +113,7 @@ fn mesh_for_collider(collider: &ColliderShape) -> Mesh {
             ..default()
         }
         .into(),
-        // ColliderShape::Cuboid(c) => {
-        //     let extents = 2.0 * c.half_extents;
-        //     shape::Box::new(extents.x, extents.y, extents.z).into()
-        // }
+
         ColliderShape::Capsule(c) => {
             let ab = c.segment.b - c.segment.a;
             assert_eq!(ab.x, 0.0);
@@ -133,6 +126,7 @@ fn mesh_for_collider(collider: &ColliderShape) -> Mesh {
             }
             .into()
         }
+
         ColliderShape::Hull(h) => h.to_mesh(),
     }
 }
@@ -148,7 +142,7 @@ fn init_physobj(
         let mut ec = commands.entity(ent);
         ec.insert(PbrBundle {
             mesh: meshes.add(mesh_for_collider(&obj.shape)),
-            material: materials.add(Color::WHITE.into()),
+            material: materials.add(Color::WHITE.with_a(0.5).into()),
             transform: xf,
             ..default()
         })
@@ -162,32 +156,34 @@ fn init_physobj(
 }
 
 fn update_physobj(
-    mut objs: Query<(&PhysObj, &mut Handle<Mesh>, &mut Handle<StandardMaterial>), Changed<PhysObj>>,
+    mut objs: Query<(&PhysObj, &mut Handle<Mesh>), Changed<PhysObj>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    for (obj, mut mesh, mut mat) in objs.iter_mut() {
+    for (obj, mut mesh) in objs.iter_mut() {
         *mesh = meshes.add(mesh_for_collider(&obj.shape));
     }
 }
 
 #[derive(Debug, Component)]
-struct ClosestPoints {
-    a: Entity,
-    b: Entity,
+struct ContactPair {
+    on_a: Entity,
+    on_b: Entity,
 }
 
 #[derive(Debug, Component)]
-struct ClosestPointsVis {
+struct ContactVis {
     a_vis: Entity,
     b_vis: Entity,
+    contact_points: ArrayVec<Entity, 4>,
+    axis: Vec3,
 }
 
 #[derive(Debug, Component)]
 struct VisTag;
 
-fn init_closest_points(
+fn init_contact_vis(
     mut commands: Commands,
-    query: Query<Entity, (With<ClosestPoints>, Without<ClosestPointsVis>)>,
+    query: Query<Entity, (With<ContactPair>, Without<ContactVis>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -211,69 +207,109 @@ fn init_closest_points(
 
         let a_vis = commands.spawn(vis()).insert(VisTag).id();
         let b_vis = commands.spawn(vis()).insert(VisTag).id();
+        let contact_points = ArrayVec::from_iter(
+            iter::repeat_with(|| commands.spawn(vis()).insert(VisTag).id()).take(4),
+        );
 
         let mut ec = commands.entity(ent);
-        ec.insert(ClosestPointsVis { a_vis, b_vis });
+        ec.insert(ContactVis {
+            a_vis,
+            b_vis,
+            contact_points,
+            axis: Vec3::ZERO,
+        });
     }
 }
 
-fn update_closest_points(
-    query: Query<(&ClosestPoints, &ClosestPointsVis)>,
+fn update_contact_vis(
+    query: Query<(&ContactPair, &ContactVis)>,
     objs: Query<(&PhysObj, &Transform), Without<VisTag>>,
-    mut vis: Query<&mut Transform, With<VisTag>>,
+    mut vis: Query<(&mut Transform, &mut Visibility), With<VisTag>>,
 ) {
     for (closest, closest_vis) in query.iter() {
-        let (a_obj, a_xf) = objs.get(closest.a).unwrap();
-        let (b_obj, b_xf) = objs.get(closest.b).unwrap();
+        let (a_obj, a_xf) = objs.get(closest.on_a).unwrap();
+        let (b_obj, b_xf) = objs.get(closest.on_b).unwrap();
         let a_iso = Isometry::from_transform(*a_xf);
         let b_iso = Isometry::from_transform(*b_xf);
 
-        let opt_points = match (&a_obj.shape, &b_obj.shape) {
+        let contact = match (&a_obj.shape, &b_obj.shape) {
             (ColliderShape::Capsule(c1), ColliderShape::Capsule(c2)) => {
-                closest_capsule_capsule(c1, a_iso, c2, b_iso)
+                contact_capsule_capsule(c1, a_iso, c2, b_iso)
             }
 
             (ColliderShape::Capsule(c), ColliderShape::Hull(h)) => {
-                closest_capsule_hull(c, a_iso, h, b_iso)
+                continue;
+                // closest_capsule_hull(c, a_iso, h, b_iso)
             }
 
             (ColliderShape::Hull(h), ColliderShape::Capsule(c)) => {
-                closest_capsule_hull(c, b_iso, h, a_iso).map(|(b, a)| (a, b))
+                continue;
+                // closest_capsule_hull(c, b_iso, h, a_iso).map(|(b, a)| (a, b))
             }
 
             (ColliderShape::Sphere(s1), ColliderShape::Sphere(s2)) => {
-                closest_sphere_sphere(s1, a_iso, s2, b_iso)
+                contact_sphere_sphere(s1, a_iso, s2, b_iso)
             }
 
             (ColliderShape::Capsule(c), ColliderShape::Sphere(s)) => {
-                closest_capsule_sphere(c, a_iso, s, b_iso)
+                contact_capsule_sphere(c, a_iso, s, b_iso)
             }
 
             (ColliderShape::Sphere(s), ColliderShape::Capsule(c)) => {
-                closest_capsule_sphere(c, b_iso, s, a_iso).map(|(b, a)| (a, b))
+                contact_capsule_sphere(c, b_iso, s, a_iso).reverse()
             }
 
             (ColliderShape::Hull(h), ColliderShape::Sphere(s)) => {
-                closest_hull_sphere(h, a_iso, s, b_iso)
+                continue;
+                // closest_hull_sphere(h, a_iso, s, b_iso)
             }
 
             (ColliderShape::Sphere(s), ColliderShape::Hull(h)) => {
-                closest_hull_sphere(h, b_iso, s, a_iso).map(|(b, a)| (a, b))
+                continue;
+                // closest_hull_sphere(h, b_iso, s, a_iso).map(|(b, a)| (a, b))
             }
 
             (ColliderShape::Hull(h1), ColliderShape::Hull(h2)) => {
-                closest_hull_hull(h1, a_iso, h2, b_iso)
+                continue;
+                // closest_hull_hull(h1, a_iso, h2, b_iso)
             }
         };
 
-        let Some((on_a, on_b)) = opt_points else {
-            continue;
-        };
+        match contact {
+            Contact::Disjoint(d) => {
+                let (mut a_xf, mut a_vis) = vis.get_mut(closest_vis.a_vis).unwrap();
+                *a_xf = Transform::from_translation(d.on_a);
+                *a_vis = Visibility::Visible;
 
-        let mut a_xf = vis.get_mut(closest_vis.a_vis).unwrap();
-        a_xf.translation = on_a;
-        let mut b_xf = vis.get_mut(closest_vis.b_vis).unwrap();
-        b_xf.translation = on_b;
+                let (mut b_xf, mut b_vis) = vis.get_mut(closest_vis.b_vis).unwrap();
+                *b_xf = Transform::from_translation(d.on_b);
+                *b_vis = Visibility::Visible;
+
+                for &pt in &closest_vis.contact_points {
+                    let (_xf, mut vis) = vis.get_mut(pt).unwrap();
+                    *vis = Visibility::Hidden;
+                }
+            }
+
+            Contact::Penetrating(p) => {
+                let (_a_xf, mut a_vis) = vis.get_mut(closest_vis.a_vis).unwrap();
+                *a_vis = Visibility::Hidden;
+
+                let (_b_xf, mut b_vis) = vis.get_mut(closest_vis.b_vis).unwrap();
+                *b_vis = Visibility::Hidden;
+
+                for &pt in &closest_vis.contact_points {
+                    let (_xf, mut vis) = vis.get_mut(pt).unwrap();
+                    *vis = Visibility::Hidden;
+                }
+
+                for (i, &pt) in p.points.iter().enumerate() {
+                    let (mut xf, mut vis) = vis.get_mut(closest_vis.contact_points[i]).unwrap();
+                    *xf = Transform::from_translation(pt);
+                    *vis = Visibility::Visible;
+                }
+            }
+        }
     }
 }
 
@@ -282,7 +318,6 @@ enum ShapeSel {
     Sphere,
     Capsule,
     Hull,
-    // Box,
 }
 
 fn label_slider<N: emath::Numeric>(
@@ -324,8 +359,6 @@ fn render_ui(
         ColliderShape::Sphere(_) => ShapeSel::Sphere,
         ColliderShape::Capsule(_) => ShapeSel::Capsule,
         ColliderShape::Hull(_) => ShapeSel::Hull,
-        // ColliderShape::Cuboid(_) => ShapeSel::Box,
-        // ColliderShape::Polyhedron(_) => ShapeSel::Polyhedron,
     };
 
     egui::Window::new("Physics object").show(egui_cx.ctx_mut(), |ui| {
@@ -335,7 +368,6 @@ fn render_ui(
                 ui.selectable_value(&mut shape_sel, ShapeSel::Sphere, "Sphere");
                 ui.selectable_value(&mut shape_sel, ShapeSel::Capsule, "Capsule");
                 ui.selectable_value(&mut shape_sel, ShapeSel::Hull, "Hull");
-                // ui.selectable_value(&mut shape_sel, ShapeSel::Box, "Box");
             });
 
         ui.separator();
@@ -348,23 +380,17 @@ fn render_ui(
                     1.0
                 };
 
+                let old_radius = radius;
                 label_slider(ui, "Radius", &mut radius, 0.1..=5.0);
 
-                if !matches!(&obj.shape, ColliderShape::Sphere(_)) {
+                if !matches!(&obj.shape, ColliderShape::Sphere(_)) || radius != old_radius {
                     obj.shape = ColliderShape::Sphere(Sphere {
                         center: Vec3::ZERO,
                         radius,
                     });
                 }
-            } // ShapeSel::Box => {
-            //     if !matches!(&obj.shape, ColliderShape::Cuboid(_)) {
-            //         obj.shape = ColliderShape::Cuboid(Obb {
-            //             world_center: Vec3::ZERO,
-            //             local_to_world: Mat3::IDENTITY,
-            //             half_extents: Vec3::splat(1.0),
-            //         });
-            //     }
-            // }
+            }
+
             ShapeSel::Capsule => {
                 if !matches!(&obj.shape, ColliderShape::Capsule(_)) {
                     obj.shape = ColliderShape::Capsule(Capsule {

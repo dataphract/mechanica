@@ -1,4 +1,4 @@
-/// The Gilbert-Johnson-Keerthi least distance algorithm.
+//! The Gilbert-Johnson-Keerthi least distance algorithm.
 //
 // Implementation based on "A Fast and Robust GJK Implementation for Collision Detection of Convex
 // Objects" by Gino van den Bergen (https://doi.org/10.1080/10867651.1999.10487502).
@@ -7,6 +7,15 @@ use glam::{Vec3, Vec3A};
 
 use crate::{hull::Hull, Isometry, Segment, Sphere};
 
+/// Computes the closest points between two convex objects.
+///
+/// The objects `obj_a` and `obj_b` are transformed by `iso_a` and `iso_b`, respectively, when
+/// computing the closest points.
+///
+/// If `obj_a` and `obj_b` are disjoint, returns a tuple `(on_a, on_b)` containing the closest
+/// points on each object to the other object.
+///
+/// If `obj_a` and `obj_b` intersect, returns `None`.
 pub fn closest<T, U>(
     obj_a: &T,
     iso_a: Isometry,
@@ -18,9 +27,6 @@ where
     U: Support,
 {
     const REL_ERROR: f32 = 1.0e-6;
-
-    // Assuming units are in meters, this terminates the loop if
-    // of each other.
     const ABS_ERROR: f32 = 1.0e-6;
 
     let mut points_a = [Vec3A::ZERO; 4];
@@ -326,7 +332,7 @@ impl Simplex {
     }
 }
 
-/// A trait for types which can compute supporting points in a given direction.
+/// A trait which equips a convex set with a support map.
 pub trait Support {
     /// Computes the supporting point of this convex set in the direction given by `dir`.
     fn local_support(&self, dir: Vec3A) -> Vec3A;
@@ -334,8 +340,9 @@ pub trait Support {
     /// Computes the supporting point of this convex set, transformed by `transform`, in the direction
     /// given by `dir`.
     ///
-    /// The default implementation rotates `dir` by the inverse of `transform.rotation`, then calls
-    /// `local_support`, and finally applies `transform` to the local support point.
+    /// The default implementation rotates `dir` by the inverse of `transform.rotation`, calls
+    /// `local_support` to obtain a support point in the local coordinate space of `self`, and
+    /// finally applies `transform` to the local support point.
     #[inline]
     fn support(&self, transform: Isometry, dir: Vec3A) -> Vec3A {
         let Isometry {

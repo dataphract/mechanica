@@ -2,6 +2,7 @@ use glam::{Quat, Vec3, Vec3A};
 
 use crate::Isometry;
 
+/// An axis-aligned bounding box.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Aabb {
     origin: Vec3,
@@ -9,6 +10,7 @@ pub struct Aabb {
 }
 
 impl Aabb {
+    /// Constructs an AABB given its origin and half-extents (or radii) along each axis.
     pub fn new(origin: Vec3, half_extents: Vec3) -> Aabb {
         Aabb {
             origin,
@@ -16,6 +18,7 @@ impl Aabb {
         }
     }
 
+    /// Returns `true` _iff_ `self` intersects `b`.
     #[inline]
     pub fn intersects_aabb(&self, b: &Aabb) -> bool {
         (self.origin_a() - b.origin_a())
@@ -24,17 +27,20 @@ impl Aabb {
             .all()
     }
 
+    /// Returns `true` _iff_ `self` fully contains the AABB `b`.
     #[inline]
     pub fn contains_aabb(&self, b: &Aabb) -> bool {
         self.mins_a().cmple(b.mins_a()).all() && self.maxs_a().cmpge(b.maxs_a()).all()
     }
 
+    /// Returns `true` _iff_ `self` fully contains the point `point`.
     #[inline]
     pub fn contains_point(&self, point: Vec3) -> bool {
         let point = Vec3A::from(point);
         self.mins_a().cmple(point).all() && self.maxs_a().cmpge(point).all()
     }
 
+    /// Returns the closest point on the AABB to the point `point`.
     #[inline]
     pub fn closest_point_to(&self, point: Vec3) -> Vec3 {
         let mins = self.origin - self.half_extents;
@@ -42,6 +48,7 @@ impl Aabb {
         point.clamp(mins, maxs)
     }
 
+    /// Returns the origin of the AABB.
     #[inline]
     pub fn origin(&self) -> Vec3 {
         self.origin
@@ -52,6 +59,7 @@ impl Aabb {
         self.origin.into()
     }
 
+    /// Returns the half-extents of the AABB.
     #[inline]
     pub fn half_extents(&self) -> Vec3 {
         self.half_extents
@@ -62,7 +70,7 @@ impl Aabb {
         self.half_extents.into()
     }
 
-    /// Returns the minimum extents of the AABB along each axis.
+    /// Returns the minimum extent of the AABB along each axis.
     #[inline]
     pub fn mins(&self) -> Vec3 {
         self.origin - self.half_extents
@@ -73,7 +81,7 @@ impl Aabb {
         Vec3A::from(self.origin) - Vec3A::from(self.half_extents)
     }
 
-    /// Returns the maximum extents of the AABB along each axis.
+    /// Returns the maximum extent of the AABB along each axis.
     #[inline]
     pub fn maxs(&self) -> Vec3 {
         self.origin + self.half_extents
@@ -84,6 +92,7 @@ impl Aabb {
         Vec3A::from(self.origin) + Vec3A::from(self.half_extents)
     }
 
+    /// Returns the union of `self` with the AABB `b`.
     pub fn union(&self, b: &Aabb) -> Aabb {
         let mins = self.mins_a().min(b.mins_a());
         let maxs = self.maxs_a().max(b.maxs_a());
@@ -97,6 +106,7 @@ impl Aabb {
         }
     }
 
+    /// Returns the surface area of the AABB.
     pub fn surface_area(&self) -> f32 {
         let [w, h, d] = (2.0 * self.half_extents).into();
 

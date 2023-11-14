@@ -2,6 +2,7 @@ use glam::{Vec3, Vec3A};
 
 use crate::{gjk, hull::Hull, Capsule, Isometry, Segment, Sphere};
 
+/// Computes the closest points between two capsules.
 pub fn closest_capsule_capsule(
     capsule_a: &Capsule,
     iso_a: Isometry,
@@ -34,6 +35,7 @@ pub fn closest_capsule_capsule(
     Some((on_a.into(), on_b.into()))
 }
 
+/// Computes the closest points between a capsule and a convex hull.
 pub fn closest_capsule_hull(
     capsule: &Capsule,
     iso_a: Isometry,
@@ -54,6 +56,7 @@ pub fn closest_capsule_hull(
     Some(((capsule.radius * dir + on_segment).into(), on_hull.into()))
 }
 
+/// Computes the closest points between a capsule and a sphere.
 pub fn closest_capsule_sphere(
     capsule: &Capsule,
     iso_a: Isometry,
@@ -77,12 +80,13 @@ pub fn closest_capsule_sphere(
         return None;
     }
 
-    let on_sphere = c + sphere.radius * dir;
     let on_capsule = on_segment - capsule.radius * dir;
+    let on_sphere = c + sphere.radius * dir;
 
-    Some((on_sphere.into(), on_capsule.into()))
+    Some((on_capsule.into(), on_sphere.into()))
 }
 
+/// Computes the closest points between two convex hulls.
 pub fn closest_hull_hull(
     hull_a: &Hull,
     iso_a: Isometry,
@@ -93,6 +97,7 @@ pub fn closest_hull_hull(
     Some((on_a.into(), on_b.into()))
 }
 
+/// Computes the closest points between a convex hull and a sphere.
 pub fn closest_hull_sphere(
     hull: &Hull,
     iso_a: Isometry,
@@ -113,6 +118,7 @@ pub fn closest_hull_sphere(
     Some((on_hull.into(), (sphere.radius * dir + center).into()))
 }
 
+/// Computes the closest points between two spheres.
 pub fn closest_sphere_sphere(
     sphere_a: &Sphere,
     iso_a: Isometry,
