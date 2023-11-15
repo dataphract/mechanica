@@ -7,6 +7,8 @@ use bevy::{
 use glam::{Vec3, Vec3A};
 use hashbrown::HashSet;
 
+use crate::Plane;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct VertIdx(u32);
 
@@ -84,6 +86,17 @@ impl Hull {
             .skip(first as usize)
             .take(len as usize)
             .map(|&ei| self.edges[ei as usize])
+    }
+
+    pub(crate) fn iter_faces(&self) -> impl Iterator<Item = Face<'_>> + '_ {
+        self.faces
+            .iter()
+            .zip(self.face_normals.iter())
+            .map(|(&first_edge, &normal)| Face {
+                hull: self,
+                first_edge,
+                normal,
+            })
     }
 
     fn assert_invariants(&self) {
@@ -176,7 +189,7 @@ impl Hull {
     }
 
     /// Constructs a regular tetrahedron with edge lengths of `1.0`.
-    pub fn tetrahedron() -> Hull {
+    pub fn tetrahedron(scale: f32) -> Hull {
         // Top-down:
         //
         //   2.
@@ -190,10 +203,10 @@ impl Hull {
         //   1'
 
         let vertices = vec![
-            Vec3::new((8.0_f32 / 9.0).sqrt(), -1.0 / 3.0, 0.0),
-            Vec3::new(-(2.0_f32 / 9.0).sqrt(), -1.0 / 3.0, (2.0_f32 / 3.0).sqrt()),
-            Vec3::new(-(2.0_f32 / 9.0).sqrt(), -1.0 / 3.0, -(2.0_f32 / 3.0).sqrt()),
-            Vec3::new(0.0, 1.0, 0.0),
+            scale * Vec3::new((8.0_f32 / 9.0).sqrt(), -1.0 / 3.0, 0.0),
+            scale * Vec3::new(-(2.0_f32 / 9.0).sqrt(), -1.0 / 3.0, (2.0_f32 / 3.0).sqrt()),
+            scale * Vec3::new(-(2.0_f32 / 9.0).sqrt(), -1.0 / 3.0, -(2.0_f32 / 3.0).sqrt()),
+            scale * Vec3::new(0.0, 1.0, 0.0),
         ];
 
         let vert_edge_slices = vec![
@@ -436,6 +449,61 @@ impl Hull {
     //         face_normals: normals,
     //     }
     // }
+}
+
+pub(crate) struct Face<'hull> {
+    hull: &'hull Hull,
+    first_edge: EdgeIndex,
+    normal: Vec3,
+}
+
+impl<'hull> Face<'hull> {
+    pub(crate) fn centroid(&self) -> Vec3 {
+        let mut edge = &self.hull.edges[self.first_edge as usize];
+        let mut sum = Vec3A::ZERO;
+        let mut count = 0;
+        loop {
+            sum += Vec3A::from(self.hull.vertices[edge.vertex]);
+            count += 1;
+
+            if edge.next == self.first_edge {
+                break;
+            }
+
+            edge = &self.hull.edges[edge.next as usize];
+        }
+
+        (sum / count as f32).into()
+    }
+
+    pub(crate) fn plane(&self) -> Plane {
+        let edge = &self.hull.edges[self.first_edge as usize];
+        let vert = self.hull.vertices[edge.vertex];
+
+        // TODO: add unchecked version, check verts and normals at hull construction time
+        Plane::from_point_normal(vert, self.normal).unwrap()
+    }
+}
+
+macro_rules! create_hull {
+    (
+        verts: [
+            $([$x:expr, $y:expr, $z:expr]),* $(,)?
+        ],
+
+        edges: [
+            $(($v0:expr, $v1:expr)),* $(,)?
+        ],
+
+        faces: [
+            $([$first:expr, $($rest:expr),* $(,)?]),* $(,)?
+        ] $(,)?
+    ) => {
+
+        let verts = vec![$(Vec3::new($x, $y, $z)),*];
+
+        // TODO
+    };
 }
 
 #[cfg(test)]

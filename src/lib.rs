@@ -19,6 +19,7 @@ mod glam_ext;
 pub mod hull;
 pub mod mesh_edit;
 pub mod nmesh;
+pub mod sat;
 
 #[doc(inline)]
 pub use aabb::Aabb;
@@ -72,6 +73,19 @@ impl Mul<Vec3A> for Isometry {
 
     fn mul(self, rhs: Vec3A) -> Self::Output {
         self.rotation * rhs + Vec3A::from(self.translation)
+    }
+}
+
+impl Mul<Plane> for Isometry {
+    type Output = Plane;
+
+    fn mul(self, rhs: Plane) -> Self::Output {
+        // TODO: this can probably be optimized
+        Plane::from_point_normal(
+            rhs.projected_origin() + self.translation,
+            self.rotation * rhs.normal,
+        )
+        .unwrap()
     }
 }
 
@@ -381,6 +395,12 @@ impl Plane {
         }
     }
 
+    #[inline]
+    pub fn project_point(&self, point: Vec3) -> Vec3 {
+        point - self.distance_to_point(point) * self.normal
+    }
+
+    #[inline]
     pub fn projected_origin(&self) -> Vec3 {
         self.dist * self.normal
     }

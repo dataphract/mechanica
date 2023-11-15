@@ -33,7 +33,6 @@ impl Arc {
         // - [c · (b ⨯ a)] * [b · (d ⨯ c)] > 0
 
         let bxa = b.cross(a);
-        let dxc = d.cross(c);
 
         let cba = c.dot(bxa);
         let dba = d.dot(bxa);
@@ -41,6 +40,8 @@ impl Arc {
         if cba * dba >= 0.0 {
             return false;
         }
+
+        let dxc = d.cross(c);
 
         let adc = a.dot(dxc);
         let bdc = b.dot(dxc);

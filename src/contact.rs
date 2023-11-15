@@ -1,7 +1,10 @@
+//! Contact
+
 use arrayvec::ArrayVec;
+use bevy::prelude::Gizmos;
 use glam::{Vec3, Vec3A};
 
-use crate::{Capsule, Isometry, Segment, Sphere};
+use crate::{gjk, hull::Hull, Capsule, Isometry, Plane, Segment, Sphere};
 
 /// The result of a collision test between two colliders.
 pub enum Contact {
@@ -193,8 +196,8 @@ pub fn contact_capsule_capsule(
     let axis = to_b / inner_dist;
     let dist = inner_dist - radii;
 
-    let on_a = inner_a + dist * axis;
-    let on_b = inner_b - dist * axis;
+    let on_a = inner_a + capsule_a.radius * axis;
+    let on_b = inner_b - capsule_b.radius * axis;
 
     if dist > 0.0 {
         Contact::Disjoint(Disjoint {
@@ -270,7 +273,59 @@ pub fn contact_capsule_sphere(
 
 fn collide_hull_hull() {}
 
-fn collide_hull_sphere() {}
+pub fn contact_hull_sphere(
+    hull: &Hull,
+    iso_a: Isometry,
+    sphere: &Sphere,
+    iso_b: Isometry,
+) -> Contact {
+    // If the sphere center is not interior to the convex hull, GJK suffices to find the contact.
+    if let Some((on_hull, center)) = gjk::closest(hull, iso_a, &sphere.center, iso_b) {
+        let to_center = center - on_hull;
+        let inner_dist = to_center.length();
+        let axis = to_center / inner_dist;
+        let dist = inner_dist - sphere.radius;
+        let on_sphere = center - sphere.radius * axis;
+
+        if dist <= 0.0 {
+            return Contact::Penetrating(Penetrating {
+                points: ArrayVec::from_iter([(0.5 * (on_hull + on_sphere)).into()]),
+                axis: axis.into(),
+                depth: dist.abs(),
+            });
+        } else {
+            return Contact::Disjoint(Disjoint {
+                on_a: on_hull.into(),
+                on_b: on_sphere.into(),
+                dist,
+            });
+        }
+    }
+
+    let center = iso_b * sphere.center;
+
+    // Find the face closest to the sphere center.
+    let mut min_depth = f32::INFINITY;
+    let mut closest_plane = Plane::new(Vec3::X, 0.0).unwrap();
+    for face in hull.iter_faces() {
+        let plane = iso_a * face.plane();
+
+        let depth = plane.distance_to_point(center).abs();
+
+        if depth < min_depth {
+            closest_plane = plane;
+            min_depth = depth;
+        }
+    }
+
+    let on_hull = closest_plane.project_point(center);
+
+    Contact::Penetrating(Penetrating {
+        points: ArrayVec::from_iter([on_hull]),
+        axis: closest_plane.normal,
+        depth: min_depth + sphere.radius,
+    })
+}
 
 /// Computes the collision of two spheres.
 pub fn contact_sphere_sphere(

@@ -15,11 +15,11 @@ use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
 use bevy_mod_picking::{prelude::*, PickableBundle};
 use bevy_transform_gizmo::{GizmoPickSource, GizmoTransformable};
 use cg3::{
-    closest::{
-        closest_capsule_capsule, closest_capsule_hull, closest_hull_hull, closest_hull_sphere,
-    },
     collider::ColliderShape,
-    contact::{contact_capsule_capsule, contact_capsule_sphere, contact_sphere_sphere, Contact},
+    contact::{
+        contact_capsule_capsule, contact_capsule_sphere, contact_hull_sphere,
+        contact_sphere_sphere, Contact,
+    },
     hull::Hull,
     Capsule, Isometry, Segment, Sphere,
 };
@@ -81,7 +81,7 @@ fn spawn(mut commands: Commands) {
                 radius: 1.0,
             }),
         })
-        .insert(Transform::from_xyz(2.0, 1.0, 0.0))
+        .insert(Transform::from_xyz(-2.0, 1.0, 0.0))
         .id();
 
     let obj2 = commands
@@ -92,7 +92,7 @@ fn spawn(mut commands: Commands) {
                 radius: 1.0,
             }),
         })
-        .insert(Transform::from_xyz(-2.0, 1.0, 0.0))
+        .insert(Transform::from_xyz(2.0, 1.0, 0.0))
         .id();
 
     commands.spawn_empty().insert(ContactPair {
@@ -225,6 +225,7 @@ fn update_contact_vis(
     query: Query<(&ContactPair, &ContactVis)>,
     objs: Query<(&PhysObj, &Transform), Without<VisTag>>,
     mut vis: Query<(&mut Transform, &mut Visibility), With<VisTag>>,
+    mut gizmos: Gizmos,
 ) {
     for (closest, closest_vis) in query.iter() {
         let (a_obj, a_xf) = objs.get(closest.on_a).unwrap();
@@ -260,13 +261,11 @@ fn update_contact_vis(
             }
 
             (ColliderShape::Hull(h), ColliderShape::Sphere(s)) => {
-                continue;
-                // closest_hull_sphere(h, a_iso, s, b_iso)
+                contact_hull_sphere(h, a_iso, s, b_iso)
             }
 
             (ColliderShape::Sphere(s), ColliderShape::Hull(h)) => {
-                continue;
-                // closest_hull_sphere(h, b_iso, s, a_iso).map(|(b, a)| (a, b))
+                contact_hull_sphere(h, b_iso, s, a_iso).reverse()
             }
 
             (ColliderShape::Hull(h1), ColliderShape::Hull(h2)) => {
@@ -304,6 +303,8 @@ fn update_contact_vis(
                 }
 
                 for (i, &pt) in p.points.iter().enumerate() {
+                    gizmos.ray(pt, p.axis, Color::BLACK);
+
                     let (mut xf, mut vis) = vis.get_mut(closest_vis.contact_points[i]).unwrap();
                     *xf = Transform::from_translation(pt);
                     *vis = Visibility::Visible;
@@ -405,7 +406,7 @@ fn render_ui(
 
             ShapeSel::Hull => {
                 if !matches!(&obj.shape, ColliderShape::Hull(_)) {
-                    obj.shape = ColliderShape::Hull(Hull::tetrahedron());
+                    obj.shape = ColliderShape::Hull(Hull::tetrahedron(2.0));
                 }
             }
         }
