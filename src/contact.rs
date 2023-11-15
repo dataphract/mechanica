@@ -1,7 +1,7 @@
 //! Contact
 
 use arrayvec::ArrayVec;
-use bevy::prelude::Gizmos;
+use bevy::prelude::{Color, Gizmos};
 use glam::{Vec3, Vec3A};
 
 use crate::{gjk, hull::Hull, Capsule, Isometry, Plane, Segment, Sphere};
@@ -278,7 +278,11 @@ pub fn contact_hull_sphere(
     iso_a: Isometry,
     sphere: &Sphere,
     iso_b: Isometry,
+    gizmos: &mut Gizmos,
 ) -> Contact {
+    // FIXME: this fails when an axis-aligned box and a sphere have two coordinates in common -- GJK
+    // succeeds even when the sphere is deeply penetrating.
+
     // If the sphere center is not interior to the convex hull, GJK suffices to find the contact.
     if let Some((on_hull, center)) = gjk::closest(hull, iso_a, &sphere.center, iso_b) {
         let to_center = center - on_hull;
@@ -286,6 +290,8 @@ pub fn contact_hull_sphere(
         let axis = to_center / inner_dist;
         let dist = inner_dist - sphere.radius;
         let on_sphere = center - sphere.radius * axis;
+
+        println!("{dist}");
 
         if dist <= 0.0 {
             return Contact::Penetrating(Penetrating {
@@ -310,6 +316,10 @@ pub fn contact_hull_sphere(
     for face in hull.iter_faces() {
         let plane = iso_a * face.plane();
 
+        assert!(plane.normal.is_normalized());
+
+        gizmos.ray(iso_a * face.centroid(), plane.normal, Color::RED);
+
         let depth = plane.distance_to_point(center).abs();
 
         if depth < min_depth {
@@ -318,6 +328,7 @@ pub fn contact_hull_sphere(
         }
     }
 
+    println!("closest: {closest_plane:?}");
     let on_hull = closest_plane.project_point(center);
 
     Contact::Penetrating(Penetrating {

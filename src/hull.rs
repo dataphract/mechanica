@@ -265,6 +265,90 @@ impl Hull {
         }
     }
 
+    pub fn cuboid(half_extents: Vec3) -> Hull {
+        let hx = 0.5 * half_extents.x;
+        let hy = 0.5 * half_extents.y;
+        let hz = 0.5 * half_extents.z;
+
+        #[rustfmt::skip]
+        let vertices: Vec<Vec3> = vec![
+            [ hx,  hy,  hz].into(),
+            [-hx,  hy,  hz].into(),
+            [-hx, -hy,  hz].into(),
+            [ hx, -hy,  hz].into(),
+            [ hx,  hy, -hz].into(),
+            [-hx,  hy, -hz].into(),
+            [-hx, -hy, -hz].into(),
+            [ hx, -hy, -hz].into(),
+        ];
+
+        #[rustfmt::skip]
+        let vert_edge_slices = vec![
+            ListSlice { first: 0, len: 3 },
+            ListSlice { first: 3, len: 3 },
+            ListSlice { first: 6, len: 3 },
+            ListSlice { first: 9, len: 3 },
+            ListSlice { first: 12, len: 3 },
+            ListSlice { first: 15, len: 3 },
+            ListSlice { first: 18, len: 3 },
+            ListSlice { first: 21, len: 3 },
+        ];
+
+        #[rustfmt::skip]
+        let vert_edges = vec![
+            0, 7, 8,
+            2, 1, 13,
+            4, 3, 17,
+            6, 5, 21,
+            10, 9, 23,
+            12, 11, 14,
+            16, 15, 18,
+            20, 19, 22,
+        ];
+
+        #[rustfmt::skip]
+        let edges = vec![
+            Edge { vertex:  0.into(), next:  2, face: 0 }, // AB
+            Edge { vertex:  1.into(), next:  8, face: 1 }, // BA
+            Edge { vertex:  1.into(), next:  4, face: 0 }, // BC
+            Edge { vertex:  2.into(), next: 13, face: 2 }, // CB
+            Edge { vertex:  2.into(), next:  6, face: 0 }, // CD
+            Edge { vertex:  3.into(), next: 17, face: 3 }, // DC
+            Edge { vertex:  3.into(), next:  0, face: 0 }, // DA
+            Edge { vertex:  0.into(), next: 21, face: 4 }, // AD
+
+            Edge { vertex:  0.into(), next: 10, face: 1 }, // AE
+            Edge { vertex:  4.into(), next:  7, face: 4 }, // EA
+            Edge { vertex:  4.into(), next: 12, face: 1 }, // EF
+            Edge { vertex:  5.into(), next: 23, face: 5 }, // FE
+            Edge { vertex:  5.into(), next:  1, face: 1 }, // FB
+            Edge { vertex:  1.into(), next: 14, face: 2 }, // BF
+            Edge { vertex:  5.into(), next: 16, face: 2 }, // FG
+            Edge { vertex:  6.into(), next: 11, face: 5 }, // GF
+
+            Edge { vertex:  6.into(), next:  3, face: 2 }, // GC
+            Edge { vertex:  2.into(), next: 18, face: 3 }, // CG
+            Edge { vertex:  6.into(), next: 20, face: 3 }, // GH
+            Edge { vertex:  7.into(), next: 15, face: 5 }, // HG
+            Edge { vertex:  7.into(), next:  5, face: 3 }, // HD
+            Edge { vertex:  3.into(), next: 22, face: 4 }, // DH
+            Edge { vertex:  7.into(), next:  9, face: 4 }, // HE
+            Edge { vertex:  4.into(), next: 19, face: 5 }, // EH
+        ];
+
+        let faces = vec![0, 1, 3, 5, 7, 11];
+        let face_normals = vec![Vec3::Z, Vec3::Y, -Vec3::X, -Vec3::Y, Vec3::X, -Vec3::Z];
+
+        Hull {
+            vertices,
+            vert_edge_slices,
+            vert_edges,
+            edges,
+            faces,
+            face_normals,
+        }
+    }
+
     // pub fn dodecahedron() -> Hull {
     //     const PHI: f32 = 1.618034;
     //     const FRAC_1_PHI: f32 = 0.618034;

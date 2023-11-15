@@ -40,6 +40,13 @@ impl Isometry {
         }
     }
 
+    pub fn from_translation(v: Vec3) -> Isometry {
+        Isometry {
+            translation: v,
+            ..Default::default()
+        }
+    }
+
     /// Computes the transformation matrix of the isometry.
     pub fn compute_matrix(&self) -> Mat4 {
         Mat4::from_rotation_translation(self.rotation, self.translation)
@@ -351,6 +358,7 @@ impl Segment {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Plane {
     // Unit vector normal to the plane.
     normal: Vec3,

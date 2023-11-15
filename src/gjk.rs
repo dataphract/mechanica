@@ -34,6 +34,7 @@ where
 
     // Initialize v with an arbitrary support point on the Minkowski difference.
     let init_a = obj_a.support(iso_a, Vec3A::X);
+
     let init_b = obj_b.support(iso_b, -Vec3A::X);
     let mut v = init_a - init_b;
     let mut dist = v.length();
@@ -44,6 +45,7 @@ where
     while simplex.bits < 0b1111 && dist > ABS_ERROR {
         // Compute the support point on the Minkowski difference.
         let point_a = obj_a.support(iso_a, -v);
+
         let point_b = obj_b.support(iso_b, v);
         let new_point = point_a - point_b;
 
@@ -69,10 +71,11 @@ where
         };
 
         v = closest;
+
         dist = v.length();
     }
 
-    if simplex.bits == 0b1111 {
+    if dist <= ABS_ERROR || simplex.bits == 0b1111 {
         return None;
     }
 
@@ -88,7 +91,6 @@ where
         }
 
         let d = simplex.det[simplex.bits as usize][i];
-        println!("{i}: d = {d}");
         bary_sum += d;
         point_a += d * points_a[i];
         point_b += d * points_b[i];
@@ -528,5 +530,24 @@ mod tests {
         simplex.insert(v3).unwrap();
 
         assert_eq!(simplex.find_closest().unwrap(), Vec3A::new(0.5, 0.5, 0.0));
+    }
+
+    #[test]
+    fn cube_point() {
+        let cube = Hull::cube(2.0);
+
+        let closest_points = closest(
+            &cube,
+            Isometry::default(),
+            &Vec3::new(0.3, 0.3, 0.3),
+            // &Vec3::ZERO,
+            Isometry::default(),
+        );
+
+        assert!(
+            closest_points.is_none(),
+            "GJK returned closest points: {:?}",
+            closest_points
+        );
     }
 }

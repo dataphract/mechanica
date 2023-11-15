@@ -31,7 +31,8 @@ fn main() {
         .add_plugins(EguiPlugin)
         .add_plugins(bevy_mod_picking::DefaultPickingPlugins)
         .add_plugins(bevy_transform_gizmo::TransformGizmoPlugin::default())
-        .add_systems(Startup, spawn.chain())
+        .add_systems(Startup, setup)
+        .add_systems(PostStartup, post_startup)
         .add_systems(Update, init_physobj)
         .add_systems(Update, init_contact_vis)
         .add_systems(Update, control_camera)
@@ -46,7 +47,22 @@ struct Collider {
     shape: ColliderShape,
 }
 
-fn spawn(mut commands: Commands) {
+fn post_startup(
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    highlight: ResMut<GlobalHighlight<StandardMaterial>>,
+) {
+    let mut make_translucent = |handle| {
+        let mat = materials.get_mut(handle).unwrap();
+        mat.alpha_mode = AlphaMode::Blend;
+        mat.base_color.set_a(0.5);
+    };
+
+    make_translucent(&highlight.hovered);
+    make_translucent(&highlight.pressed);
+    make_translucent(&highlight.selected);
+}
+
+fn setup(mut commands: Commands) {
     commands.spawn(InfiniteGridBundle::default());
 
     commands
@@ -78,7 +94,7 @@ fn spawn(mut commands: Commands) {
         .insert(PhysObj {
             shape: ColliderShape::Sphere(Sphere {
                 center: Vec3::ZERO,
-                radius: 1.0,
+                radius: 0.5,
             }),
         })
         .insert(Transform::from_xyz(-2.0, 1.0, 0.0))
@@ -89,7 +105,7 @@ fn spawn(mut commands: Commands) {
         .insert(PhysObj {
             shape: ColliderShape::Sphere(Sphere {
                 center: Vec3::ZERO,
-                radius: 1.0,
+                radius: 0.5,
             }),
         })
         .insert(Transform::from_xyz(2.0, 1.0, 0.0))
@@ -261,11 +277,11 @@ fn update_contact_vis(
             }
 
             (ColliderShape::Hull(h), ColliderShape::Sphere(s)) => {
-                contact_hull_sphere(h, a_iso, s, b_iso)
+                contact_hull_sphere(h, a_iso, s, b_iso, &mut gizmos)
             }
 
             (ColliderShape::Sphere(s), ColliderShape::Hull(h)) => {
-                contact_hull_sphere(h, b_iso, s, a_iso).reverse()
+                contact_hull_sphere(h, b_iso, s, a_iso, &mut gizmos).reverse()
             }
 
             (ColliderShape::Hull(h1), ColliderShape::Hull(h2)) => {
@@ -346,23 +362,25 @@ fn render_ui(
         }
     }
 
-    let mut obj = match last_selected.and_then(|sel| objs.get_mut(sel).ok()) {
-        Some(o) => o,
-        None => {
-            egui::Window::new("No objects selected").show(egui_cx.ctx_mut(), |ui| {
+    let ctx = egui_cx.ctx_mut();
+    egui::SidePanel::right("Contact testbed").show(ctx, |ui| {
+        ui.label("Contact testbed");
+        ui.separator();
+
+        let mut obj = match last_selected.and_then(|sel| objs.get_mut(sel).ok()) {
+            Some(o) => o,
+            None => {
                 ui.label("Select an object to modify it!");
-            });
-            return;
-        }
-    };
+                return;
+            }
+        };
 
-    let mut shape_sel = match obj.shape {
-        ColliderShape::Sphere(_) => ShapeSel::Sphere,
-        ColliderShape::Capsule(_) => ShapeSel::Capsule,
-        ColliderShape::Hull(_) => ShapeSel::Hull,
-    };
+        let mut shape_sel = match obj.shape {
+            ColliderShape::Sphere(_) => ShapeSel::Sphere,
+            ColliderShape::Capsule(_) => ShapeSel::Capsule,
+            ColliderShape::Hull(_) => ShapeSel::Hull,
+        };
 
-    egui::Window::new("Physics object").show(egui_cx.ctx_mut(), |ui| {
         egui::ComboBox::from_label("Shape")
             .selected_text(format!("{shape_sel:?}"))
             .show_ui(ui, |ui| {
@@ -378,11 +396,11 @@ fn render_ui(
                 let mut radius = if let ColliderShape::Sphere(s) = &obj.shape {
                     s.radius
                 } else {
-                    1.0
+                    0.5
                 };
 
                 let old_radius = radius;
-                label_slider(ui, "Radius", &mut radius, 0.1..=5.0);
+                label_slider(ui, "Radius", &mut radius, 0.1..=2.0);
 
                 if !matches!(&obj.shape, ColliderShape::Sphere(_)) || radius != old_radius {
                     obj.shape = ColliderShape::Sphere(Sphere {
@@ -406,7 +424,8 @@ fn render_ui(
 
             ShapeSel::Hull => {
                 if !matches!(&obj.shape, ColliderShape::Hull(_)) {
-                    obj.shape = ColliderShape::Hull(Hull::tetrahedron(2.0));
+                    //obj.shape = ColliderShape::Hull(Hull::tetrahedron(2.0));
+                    obj.shape = ColliderShape::Hull(Hull::cuboid(Vec3::splat(1.0)));
                 }
             }
         }
