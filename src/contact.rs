@@ -1,10 +1,16 @@
 //! Contact
 
+use std::ptr;
+
 use arrayvec::ArrayVec;
 use bevy::prelude::{Color, Gizmos};
 use glam::{Vec3, Vec3A};
 
-use crate::{gjk, hull::Hull, Capsule, Isometry, Plane, Segment, Sphere};
+use crate::{
+    gjk,
+    hull::{self, Hull},
+    Capsule, Isometry, Plane, Segment, SegmentClosestPair, Sphere,
+};
 
 /// The result of a collision test between two colliders.
 pub enum Contact {
@@ -61,6 +67,7 @@ impl Penetrating {
     }
 }
 
+/// Computes the contact between two capsules.
 pub fn contact_capsule_capsule(
     capsule_a: &Capsule,
     iso_a: Isometry,
@@ -214,9 +221,175 @@ pub fn contact_capsule_capsule(
     }
 }
 
-fn collide_capsule_hull() {}
+/// Computes the contact between a capsule and a hull.
+pub fn contact_capsule_hull(
+    capsule: &Capsule,
+    iso_a: Isometry,
+    hull: &Hull,
+    iso_b: Isometry,
+    gizmos: &mut Gizmos,
+) -> Contact {
+    if let Some((on_segment, on_hull)) = gjk::closest(&capsule.segment, iso_a, hull, iso_b, gizmos)
+    {
+        // If GJK succeeds, the colliders are either disjoint or in shallow penetration.
+        let to_hull = on_hull - on_segment;
+        let inner_dist = to_hull.length();
+        let dist = inner_dist - capsule.radius;
+        let axis = to_hull / inner_dist;
 
-/// Computes the collision of a capsule with a sphere.
+        if dist <= 0.0 {
+            // TODO: test for any parallel faces and generate a second contact to allow stacking.
+
+            return Contact::Penetrating(Penetrating {
+                points: ArrayVec::from_iter([on_hull.into()]),
+                axis: axis.into(),
+                depth: dist.abs(),
+            });
+        } else {
+            return Contact::Disjoint(Disjoint {
+                on_a: (on_segment + capsule.radius * axis).into(),
+                on_b: on_hull.into(),
+                dist,
+            });
+        }
+    }
+
+    // GJK failed, meaning the capsule segment is penetrating the hull. The axis of minimum
+    // penetration is either a face normal or the cross product between the capsule segment and one
+    // of the hull edges.
+
+    enum Feature {
+        Face {
+            clip_a: Vec3A,
+            clip_b: Vec3A,
+            plane: Plane,
+        },
+        Edge {
+            on_cap_seg: Vec3A,
+            on_hull: Vec3A,
+            normal: Vec3A,
+        },
+    }
+
+    let mut min_depth = f32::INFINITY;
+
+    let capsule_a = iso_a * Vec3A::from(capsule.segment.a);
+    let capsule_b = iso_a * Vec3A::from(capsule.segment.b);
+
+    let mut best_feature = None;
+
+    // Find the face normal that minimizes the penetration depth.
+    for face in hull.iter_faces() {
+        // Walk the perimeter of the face and clip the capsule segment.
+        let first_edge = face.first_edge();
+        let mut edge = first_edge;
+
+        let mut clip_a = capsule_a;
+        let mut clip_b = capsule_b;
+
+        loop {
+            let clip_plane = iso_b * edge.clip_plane();
+
+            clip_a = clip_plane.clamp_point(clip_a);
+            clip_b = clip_plane.clamp_point(clip_b);
+
+            edge = edge.next();
+            if edge == first_edge {
+                break;
+            }
+        }
+
+        let plane = iso_b * face.plane();
+
+        let a_depth = -plane.distance_to_point(clip_a);
+        let b_depth = -plane.distance_to_point(clip_b);
+
+        if a_depth >= 0.0 {
+            gizmos.ray(clip_a.into(), a_depth * plane.normal, Color::BLUE);
+        }
+
+        if b_depth >= 0.0 {
+            gizmos.ray(clip_b.into(), b_depth * plane.normal, Color::BLUE);
+        }
+
+        let face_depth = a_depth.max(b_depth);
+
+        if face_depth < min_depth {
+            best_feature = Some(Feature::Face {
+                clip_a,
+                clip_b,
+                plane,
+            });
+            min_depth = face_depth;
+        }
+    }
+
+    // Test whether any cross product between the capsule segment and a hull edge gives a smaller
+    // penetration depth.
+    for edge in hull.iter_edges() {
+        let edge_a = iso_b * edge.start();
+        let edge_b = iso_b * edge.end();
+
+        // Find the closest points on the capsule segment and the edge.
+        let capsule_segment = Segment::new(capsule_a.into(), capsule_b.into());
+        let edge_segment = Segment::new(edge_a.into(), edge_b.into());
+        let points = capsule_segment.closest_point_to_segment(&edge_segment);
+        let on_cap_seg = Vec3A::from(points.first.point);
+        let on_edge_seg = Vec3A::from(points.second.point);
+
+        // Compute the candidate contact normal.
+        let contact_normal = (on_cap_seg - on_edge_seg).normalize();
+
+        // The closest point on the segment is interior to the hull if the dot product of the hull's
+        // face normal and the capsule's contact normal is negative.
+        if edge.face_normal().dot(contact_normal) >= 0.0 {
+            continue;
+        }
+
+        let inner_depth = points.distance_squared.sqrt();
+        gizmos.ray(points.second.point, contact_normal.into(), Color::GREEN);
+
+        if inner_depth < min_depth {
+            min_depth = inner_depth;
+            best_feature = Some(Feature::Edge {
+                on_cap_seg,
+                on_hull: on_edge_seg,
+                normal: contact_normal,
+            });
+        }
+    }
+
+    match best_feature.unwrap() {
+        Feature::Face {
+            clip_a,
+            clip_b,
+            plane,
+        } => Contact::Penetrating(Penetrating {
+            points: ArrayVec::from_iter([
+                plane.project_point(clip_a).into(),
+                plane.project_point(clip_b).into(),
+            ]),
+            axis: -plane.normal,
+            depth: min_depth + capsule.radius,
+        }),
+
+        Feature::Edge {
+            on_cap_seg,
+            on_hull,
+            normal,
+        } => {
+            // If the capsule is penetrating across an edge, there's a single contact point on the
+            // separating axis.
+            Contact::Penetrating(Penetrating {
+                points: ArrayVec::from_iter([(0.5 * (on_hull + on_cap_seg)).into()]),
+                axis: normal.into(),
+                depth: min_depth + capsule.radius,
+            })
+        }
+    }
+}
+
+/// Computes the contact between a capsule and a sphere.
 pub fn contact_capsule_sphere(
     capsule: &Capsule,
     iso_a: Isometry,
@@ -271,8 +444,12 @@ pub fn contact_capsule_sphere(
     }
 }
 
-fn collide_hull_hull() {}
+/// Computes the contact between two hulls.
+fn contact_hull_hull(hull_a: &Hull, iso_a: Isometry, hull_b: &Hull, iso_b: Isometry) -> Contact {
+    todo!()
+}
 
+/// Computes the contact between a hull and a sphere.
 pub fn contact_hull_sphere(
     hull: &Hull,
     iso_a: Isometry,
@@ -280,18 +457,13 @@ pub fn contact_hull_sphere(
     iso_b: Isometry,
     gizmos: &mut Gizmos,
 ) -> Contact {
-    // FIXME: this fails when an axis-aligned box and a sphere have two coordinates in common -- GJK
-    // succeeds even when the sphere is deeply penetrating.
-
     // If the sphere center is not interior to the convex hull, GJK suffices to find the contact.
-    if let Some((on_hull, center)) = gjk::closest(hull, iso_a, &sphere.center, iso_b) {
+    if let Some((on_hull, center)) = gjk::closest(hull, iso_a, &sphere.center, iso_b, gizmos) {
         let to_center = center - on_hull;
         let inner_dist = to_center.length();
         let axis = to_center / inner_dist;
         let dist = inner_dist - sphere.radius;
         let on_sphere = center - sphere.radius * axis;
-
-        println!("{dist}");
 
         if dist <= 0.0 {
             return Contact::Penetrating(Penetrating {
@@ -308,7 +480,7 @@ pub fn contact_hull_sphere(
         }
     }
 
-    let center = iso_b * sphere.center;
+    let center = iso_b * Vec3A::from(sphere.center);
 
     // Find the face closest to the sphere center.
     let mut min_depth = f32::INFINITY;
@@ -318,8 +490,6 @@ pub fn contact_hull_sphere(
 
         assert!(plane.normal.is_normalized());
 
-        gizmos.ray(iso_a * face.centroid(), plane.normal, Color::RED);
-
         let depth = plane.distance_to_point(center).abs();
 
         if depth < min_depth {
@@ -328,17 +498,16 @@ pub fn contact_hull_sphere(
         }
     }
 
-    println!("closest: {closest_plane:?}");
     let on_hull = closest_plane.project_point(center);
 
     Contact::Penetrating(Penetrating {
-        points: ArrayVec::from_iter([on_hull]),
+        points: ArrayVec::from_iter([on_hull.into()]),
         axis: closest_plane.normal,
         depth: min_depth + sphere.radius,
     })
 }
 
-/// Computes the collision of two spheres.
+/// Computes the contact between two spheres.
 pub fn contact_sphere_sphere(
     sphere_a: &Sphere,
     iso_a: Isometry,

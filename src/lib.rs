@@ -89,7 +89,7 @@ impl Mul<Plane> for Isometry {
     fn mul(self, rhs: Plane) -> Self::Output {
         // TODO: this can probably be optimized
         Plane::from_point_normal(
-            rhs.projected_origin() + self.translation,
+            rhs.project_origin() + self.translation,
             self.rotation * rhs.normal,
         )
         .unwrap()
@@ -390,8 +390,8 @@ impl Plane {
 
     /// Signed distance between the plane and the given point.
     #[inline]
-    pub fn distance_to_point(&self, point: Vec3) -> f32 {
-        point.dot(self.normal) - self.dist
+    pub fn distance_to_point(&self, point: Vec3A) -> f32 {
+        point.dot(self.normal.into()) - self.dist
     }
 
     // TODO: tolerance
@@ -404,12 +404,21 @@ impl Plane {
     }
 
     #[inline]
-    pub fn project_point(&self, point: Vec3) -> Vec3 {
-        point - self.distance_to_point(point) * self.normal
+    pub fn project_point(&self, point: Vec3A) -> Vec3A {
+        point - self.distance_to_point(point) * Vec3A::from(self.normal)
+    }
+
+    /// Clamps `point` to the half-space in front of the plane.
+    ///
+    /// If the signed distance from the plane to the point is negative, this returns the projection
+    /// of `point` on the plane. Otherwise, this returns `point`.
+    #[inline]
+    pub fn clamp_point(&self, point: Vec3A) -> Vec3A {
+        point - self.distance_to_point(point).min(0.0) * Vec3A::from(self.normal)
     }
 
     #[inline]
-    pub fn projected_origin(&self) -> Vec3 {
+    pub fn project_origin(&self) -> Vec3 {
         self.dist * self.normal
     }
 

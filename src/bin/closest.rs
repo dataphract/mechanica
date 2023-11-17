@@ -17,7 +17,7 @@ use bevy_transform_gizmo::{GizmoPickSource, GizmoTransformable};
 use cg3::{
     collider::ColliderShape,
     contact::{
-        contact_capsule_capsule, contact_capsule_sphere, contact_hull_sphere,
+        contact_capsule_capsule, contact_capsule_hull, contact_capsule_sphere, contact_hull_sphere,
         contact_sphere_sphere, Contact,
     },
     hull::Hull,
@@ -255,13 +255,11 @@ fn update_contact_vis(
             }
 
             (ColliderShape::Capsule(c), ColliderShape::Hull(h)) => {
-                continue;
-                // closest_capsule_hull(c, a_iso, h, b_iso)
+                contact_capsule_hull(c, a_iso, h, b_iso, &mut gizmos)
             }
 
             (ColliderShape::Hull(h), ColliderShape::Capsule(c)) => {
-                continue;
-                // closest_capsule_hull(c, b_iso, h, a_iso).map(|(b, a)| (a, b))
+                contact_capsule_hull(c, b_iso, h, a_iso, &mut gizmos).reverse()
             }
 
             (ColliderShape::Sphere(s1), ColliderShape::Sphere(s2)) => {
@@ -349,12 +347,33 @@ fn label_slider<N: emath::Numeric>(
     });
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct CapsuleParams {
+    length: f32,
+    radius: f32,
+}
+
+impl Default for CapsuleParams {
+    fn default() -> Self {
+        Self {
+            length: 1.0,
+            radius: 0.5,
+        }
+    }
+}
+
 fn render_ui(
     mut egui_cx: EguiContexts,
     selected: Query<(Entity, &PickSelection), With<PhysObj>>,
     mut objs: Query<&mut PhysObj>,
     mut last_selected: Local<Option<Entity>>,
+    mut box_dims: Local<Vec3>,
+    mut capsule_params: Local<CapsuleParams>,
 ) {
+    if *box_dims == Vec3::ZERO {
+        *box_dims = Vec3::splat(1.0);
+    }
+
     for (ent, sel) in selected.iter() {
         if sel.is_selected {
             last_selected.replace(ent);
@@ -411,21 +430,33 @@ fn render_ui(
             }
 
             ShapeSel::Capsule => {
-                if !matches!(&obj.shape, ColliderShape::Capsule(_)) {
+                let old_params = *capsule_params;
+
+                label_slider(ui, "Length", &mut capsule_params.length, 0.2..=4.0);
+                label_slider(ui, "Radius", &mut capsule_params.radius, 0.1..=1.0);
+
+                if *capsule_params != old_params || !matches!(&obj.shape, ColliderShape::Capsule(_))
+                {
                     obj.shape = ColliderShape::Capsule(Capsule {
                         segment: Segment {
-                            a: 0.5 * Vec3::Y,
-                            b: -0.5 * Vec3::Y,
+                            a: 0.5 * capsule_params.length * Vec3::Y,
+                            b: -0.5 * capsule_params.length * Vec3::Y,
                         },
-                        radius: 0.5,
+                        radius: capsule_params.radius,
                     });
                 }
             }
 
             ShapeSel::Hull => {
-                if !matches!(&obj.shape, ColliderShape::Hull(_)) {
+                let old_dims = *box_dims;
+
+                label_slider(ui, "Width", &mut box_dims[0], 0.1..=2.0);
+                label_slider(ui, "Height", &mut box_dims[1], 0.1..=2.0);
+                label_slider(ui, "Depth", &mut box_dims[2], 0.1..=2.0);
+
+                if *box_dims != old_dims || !matches!(&obj.shape, ColliderShape::Hull(_)) {
                     //obj.shape = ColliderShape::Hull(Hull::tetrahedron(2.0));
-                    obj.shape = ColliderShape::Hull(Hull::cuboid(Vec3::splat(1.0)));
+                    obj.shape = ColliderShape::Hull(Hull::cuboid(*box_dims));
                 }
             }
         }

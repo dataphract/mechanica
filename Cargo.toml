@@ -15,15 +15,27 @@ bevy_mod_raycast = "0.14.1"
 bevy_transform_gizmo = "0.8.0"
 bitflags = "2.4.0"
 bitvec = "1.0.1"
-cordyceps = "0.3.2"
 glam = { version = "0.24.2", features = ["approx"] }
 hashbrown = "0.14.1"
 slotmap = "1.0.6"
 
 [dependencies."bevy"]
 version = "0.11.3"
+default-features = false
 features = [
-    "dynamic_linking"
+    "bevy_asset",
+    "bevy_core_pipeline",
+    "bevy_gizmos",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_scene",
+    "bevy_winit",
+    "dynamic_linking",
+    "multi-threaded",
+    "x11",
+    "ktx2",
+    "zstd",
+    "tonemapping_luts",
 ]
 
 [profile.dev.package."*"]

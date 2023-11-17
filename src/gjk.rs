@@ -1,9 +1,10 @@
 //! The Gilbert-Johnson-Keerthi least distance algorithm.
+use bevy::prelude::{Color, Gizmos};
 //
 // Implementation based on "A Fast and Robust GJK Implementation for Collision Detection of Convex
 // Objects" by Gino van den Bergen (https://doi.org/10.1080/10867651.1999.10487502).
 //
-use glam::{Vec3, Vec3A};
+use glam::{Quat, Vec3, Vec3A};
 
 use crate::{hull::Hull, Isometry, Segment, Sphere};
 
@@ -21,12 +22,13 @@ pub fn closest<T, U>(
     iso_a: Isometry,
     obj_b: &U,
     iso_b: Isometry,
+    gizmos: &mut Gizmos,
 ) -> Option<(Vec3A, Vec3A)>
 where
     T: Support,
     U: Support,
 {
-    const REL_ERROR: f32 = 1.0e-6;
+    const REL_ERROR: f32 = 1.0e-4;
     const ABS_ERROR: f32 = 1.0e-6;
 
     let mut points_a = [Vec3A::ZERO; 4];
@@ -534,7 +536,7 @@ mod tests {
 
     #[test]
     fn cube_point() {
-        let cube = Hull::cube(2.0);
+        let cube = Hull::cuboid(Vec3::splat(1.0));
 
         let closest_points = closest(
             &cube,

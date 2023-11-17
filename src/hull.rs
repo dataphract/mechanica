@@ -1,4 +1,7 @@
-use std::ops::{Index, IndexMut};
+use std::{
+    ops::{Index, IndexMut},
+    ptr,
+};
 
 use bevy::{
     prelude::*,
@@ -10,7 +13,7 @@ use hashbrown::HashSet;
 use crate::Plane;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct VertIdx(u32);
+pub(crate) struct VertIdx(u32);
 
 impl From<u32> for VertIdx {
     #[inline]
@@ -48,7 +51,7 @@ pub(crate) struct ListSlice {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct Edge {
+pub(crate) struct EdgeData {
     /// Index of the next edge, walking counter-clockwise.
     pub(crate) next: EdgeIndex,
     /// Index of the adjacent face.
@@ -69,7 +72,7 @@ pub struct Hull {
     // Concatenated per-vertex edge lists.
     pub(crate) vert_edges: Vec<EdgeIndex>,
 
-    pub(crate) edges: Vec<Edge>,
+    pub(crate) edges: Vec<EdgeData>,
 
     // Faces are defined implicitly by their first directed edge.
     pub(crate) faces: Vec<EdgeIndex>,
@@ -79,7 +82,7 @@ pub struct Hull {
 
 impl Hull {
     // Iterates over the edges that contain this vertex.
-    fn iter_vertex_edges(&self, vertex_id: VertIdx) -> impl Iterator<Item = Edge> + '_ {
+    fn iter_vertex_edges(&self, vertex_id: VertIdx) -> impl Iterator<Item = EdgeData> + '_ {
         let ListSlice { first, len } = self.vert_edge_slices[vertex_id.0 as usize];
         self.vert_edges
             .iter()
@@ -97,6 +100,13 @@ impl Hull {
                 first_edge,
                 normal,
             })
+    }
+
+    pub(crate) fn iter_edges(&self) -> impl Iterator<Item = Edge<'_>> + '_ {
+        (0..self.edges.len()).step_by(2).map(|i| Edge {
+            hull: self,
+            idx: i as u32,
+        })
     }
 
     fn assert_invariants(&self) {
@@ -230,18 +240,18 @@ impl Hull {
 
         #[rustfmt::skip]
         let edges = vec![
-            Edge {vertex: 0.into(), next: 2, face: 0 },
-            Edge {vertex: 1.into(), next: 6, face: 3,},
-            Edge {vertex: 1.into(), next: 4, face: 0,},
-            Edge {vertex: 2.into(), next: 8, face: 2,},
-            Edge {vertex: 2.into(), next: 0, face: 0,},
-            Edge {vertex: 0.into(), next: 10, face: 1,},
-            Edge {vertex: 0.into(), next: 9, face: 3,},
-            Edge {vertex: 3.into(), next: 5, face: 1,},
-            Edge {vertex: 1.into(), next: 11, face: 2,},
-            Edge {vertex: 3.into(), next: 1, face: 3,},
-            Edge {vertex: 2.into(), next: 7, face: 1,},
-            Edge {vertex: 3.into(), next: 3, face: 2,},
+            EdgeData {vertex: 0.into(), next: 2, face: 0 },
+            EdgeData {vertex: 1.into(), next: 6, face: 3,},
+            EdgeData {vertex: 1.into(), next: 4, face: 0,},
+            EdgeData {vertex: 2.into(), next: 8, face: 2,},
+            EdgeData {vertex: 2.into(), next: 0, face: 0,},
+            EdgeData {vertex: 0.into(), next: 10, face: 1,},
+            EdgeData {vertex: 0.into(), next: 9, face: 3,},
+            EdgeData {vertex: 3.into(), next: 5, face: 1,},
+            EdgeData {vertex: 1.into(), next: 11, face: 2,},
+            EdgeData {vertex: 3.into(), next: 1, face: 3,},
+            EdgeData {vertex: 2.into(), next: 7, face: 1,},
+            EdgeData {vertex: 3.into(), next: 3, face: 2,},
         ];
 
         let faces = vec![0, 5, 3, 1];
@@ -308,32 +318,32 @@ impl Hull {
 
         #[rustfmt::skip]
         let edges = vec![
-            Edge { vertex:  0.into(), next:  2, face: 0 }, // AB
-            Edge { vertex:  1.into(), next:  8, face: 1 }, // BA
-            Edge { vertex:  1.into(), next:  4, face: 0 }, // BC
-            Edge { vertex:  2.into(), next: 13, face: 2 }, // CB
-            Edge { vertex:  2.into(), next:  6, face: 0 }, // CD
-            Edge { vertex:  3.into(), next: 17, face: 3 }, // DC
-            Edge { vertex:  3.into(), next:  0, face: 0 }, // DA
-            Edge { vertex:  0.into(), next: 21, face: 4 }, // AD
+            EdgeData { vertex:  0.into(), next:  2, face: 0 }, // AB
+            EdgeData { vertex:  1.into(), next:  8, face: 1 }, // BA
+            EdgeData { vertex:  1.into(), next:  4, face: 0 }, // BC
+            EdgeData { vertex:  2.into(), next: 13, face: 2 }, // CB
+            EdgeData { vertex:  2.into(), next:  6, face: 0 }, // CD
+            EdgeData { vertex:  3.into(), next: 17, face: 3 }, // DC
+            EdgeData { vertex:  3.into(), next:  0, face: 0 }, // DA
+            EdgeData { vertex:  0.into(), next: 21, face: 4 }, // AD
 
-            Edge { vertex:  0.into(), next: 10, face: 1 }, // AE
-            Edge { vertex:  4.into(), next:  7, face: 4 }, // EA
-            Edge { vertex:  4.into(), next: 12, face: 1 }, // EF
-            Edge { vertex:  5.into(), next: 23, face: 5 }, // FE
-            Edge { vertex:  5.into(), next:  1, face: 1 }, // FB
-            Edge { vertex:  1.into(), next: 14, face: 2 }, // BF
-            Edge { vertex:  5.into(), next: 16, face: 2 }, // FG
-            Edge { vertex:  6.into(), next: 11, face: 5 }, // GF
+            EdgeData { vertex:  0.into(), next: 10, face: 1 }, // AE
+            EdgeData { vertex:  4.into(), next:  7, face: 4 }, // EA
+            EdgeData { vertex:  4.into(), next: 12, face: 1 }, // EF
+            EdgeData { vertex:  5.into(), next: 23, face: 5 }, // FE
+            EdgeData { vertex:  5.into(), next:  1, face: 1 }, // FB
+            EdgeData { vertex:  1.into(), next: 14, face: 2 }, // BF
+            EdgeData { vertex:  5.into(), next: 16, face: 2 }, // FG
+            EdgeData { vertex:  6.into(), next: 11, face: 5 }, // GF
 
-            Edge { vertex:  6.into(), next:  3, face: 2 }, // GC
-            Edge { vertex:  2.into(), next: 18, face: 3 }, // CG
-            Edge { vertex:  6.into(), next: 20, face: 3 }, // GH
-            Edge { vertex:  7.into(), next: 15, face: 5 }, // HG
-            Edge { vertex:  7.into(), next:  5, face: 3 }, // HD
-            Edge { vertex:  3.into(), next: 22, face: 4 }, // DH
-            Edge { vertex:  7.into(), next:  9, face: 4 }, // HE
-            Edge { vertex:  4.into(), next: 19, face: 5 }, // EH
+            EdgeData { vertex:  6.into(), next:  3, face: 2 }, // GC
+            EdgeData { vertex:  2.into(), next: 18, face: 3 }, // CG
+            EdgeData { vertex:  6.into(), next: 20, face: 3 }, // GH
+            EdgeData { vertex:  7.into(), next: 15, face: 5 }, // HG
+            EdgeData { vertex:  7.into(), next:  5, face: 3 }, // HD
+            EdgeData { vertex:  3.into(), next: 22, face: 4 }, // DH
+            EdgeData { vertex:  7.into(), next:  9, face: 4 }, // HE
+            EdgeData { vertex:  4.into(), next: 19, face: 5 }, // EH
         ];
 
         let faces = vec![0, 1, 3, 5, 7, 11];
@@ -542,6 +552,13 @@ pub(crate) struct Face<'hull> {
 }
 
 impl<'hull> Face<'hull> {
+    pub(crate) fn first_edge(&self) -> Edge<'hull> {
+        Edge {
+            hull: self.hull,
+            idx: self.first_edge,
+        }
+    }
+
     pub(crate) fn centroid(&self) -> Vec3 {
         let mut edge = &self.hull.edges[self.first_edge as usize];
         let mut sum = Vec3A::ZERO;
@@ -566,6 +583,62 @@ impl<'hull> Face<'hull> {
 
         // TODO: add unchecked version, check verts and normals at hull construction time
         Plane::from_point_normal(vert, self.normal).unwrap()
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct Edge<'hull> {
+    hull: &'hull Hull,
+    idx: EdgeIndex,
+}
+
+impl<'hull> PartialEq for Edge<'hull> {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::eq(self.hull, other.hull) && self.idx == other.idx
+    }
+}
+
+impl<'hull> Eq for Edge<'hull> {}
+
+impl<'hull> Edge<'hull> {
+    pub fn face_normal(&self) -> Vec3A {
+        self.hull.face_normals[self.hull.edges[self.idx as usize].face as usize].into()
+    }
+
+    pub fn reverse(&self) -> Edge {
+        Edge {
+            hull: self.hull,
+            idx: self.idx ^ 1,
+        }
+    }
+
+    #[inline]
+    pub fn start(&self) -> Vec3A {
+        let vi = self.hull.edges[self.idx as usize].vertex;
+        self.hull.vertices[vi].into()
+    }
+
+    #[inline]
+    pub fn end(&self) -> Vec3A {
+        self.reverse().start()
+    }
+
+    #[inline]
+    pub fn next(&self) -> Edge<'hull> {
+        Edge {
+            hull: self.hull,
+            idx: self.hull.edges[self.idx as usize].next,
+        }
+    }
+
+    #[inline]
+    pub fn clip_plane(&self) -> Plane {
+        // TODO: precompute and store the clip plane normal?
+        let normal = self
+            .face_normal()
+            .cross(self.end() - self.start())
+            .normalize();
+        Plane::from_point_normal(self.start().into(), normal.into()).unwrap()
     }
 }
 
