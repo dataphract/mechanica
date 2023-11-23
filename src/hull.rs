@@ -10,7 +10,7 @@ use bevy::{
 use glam::{Vec3, Vec3A};
 use hashbrown::HashSet;
 
-use crate::Plane;
+use crate::{Isometry, Plane};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VertIdx(u32);
@@ -110,6 +110,9 @@ impl Hull {
     }
 
     fn assert_invariants(&self) {
+        // Euler characteristic.
+        assert_eq!(self.vertices.len() - self.edges.len() + self.faces.len(), 2);
+
         assert_eq!(self.edges.len() % 2, 0);
 
         // Ensure src(A) = dst(rev(A)).
@@ -559,6 +562,14 @@ impl<'hull> Face<'hull> {
         }
     }
 
+    pub(crate) fn iter_edges(&self) -> FaceEdges<'hull> {
+        FaceEdges {
+            hull: self.hull,
+            first_edge: self.first_edge,
+            cur_edge: Some(self.first_edge),
+        }
+    }
+
     pub(crate) fn centroid(&self) -> Vec3 {
         let mut edge = &self.hull.edges[self.first_edge as usize];
         let mut sum = Vec3A::ZERO;
@@ -586,6 +597,29 @@ impl<'hull> Face<'hull> {
     }
 }
 
+pub(crate) struct FaceEdges<'hull> {
+    hull: &'hull Hull,
+    first_edge: EdgeIndex,
+    cur_edge: Option<EdgeIndex>,
+}
+
+impl<'hull> Iterator for FaceEdges<'hull> {
+    type Item = Edge<'hull>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let cur_edge = self.cur_edge?;
+
+        let next_edge = self.hull.edges[cur_edge as usize].next;
+
+        self.cur_edge = (next_edge != self.first_edge).then_some(next_edge);
+
+        Some(Edge {
+            hull: self.hull,
+            idx: cur_edge,
+        })
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Edge<'hull> {
     hull: &'hull Hull,
@@ -601,6 +635,14 @@ impl<'hull> PartialEq for Edge<'hull> {
 impl<'hull> Eq for Edge<'hull> {}
 
 impl<'hull> Edge<'hull> {
+    pub fn face(&self) -> Face<'hull> {
+        Face {
+            hull: self.hull,
+            first_edge: self.hull.faces[self.hull.edges[self.idx as usize].face as usize],
+            normal: self.face_normal().into(),
+        }
+    }
+
     pub fn face_normal(&self) -> Vec3A {
         self.hull.face_normals[self.hull.edges[self.idx as usize].face as usize].into()
     }

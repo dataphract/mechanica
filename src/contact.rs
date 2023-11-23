@@ -1,15 +1,15 @@
 //! Contact
 
-use std::ptr;
+use std::{iter, mem, ptr};
 
 use arrayvec::ArrayVec;
 use bevy::prelude::{Color, Gizmos};
-use glam::{Vec3, Vec3A};
+use glam::{Quat, Vec3, Vec3A};
 
 use crate::{
-    gjk,
-    hull::{self, Hull},
-    Capsule, Isometry, Plane, Segment, SegmentClosestPair, Sphere,
+    gjk::{self, Support},
+    hull::{Edge, Face, Hull},
+    Capsule, Isometry, Line, Plane, Segment, Sphere,
 };
 
 /// The result of a collision test between two colliders.
@@ -229,8 +229,7 @@ pub fn contact_capsule_hull(
     iso_b: Isometry,
     gizmos: &mut Gizmos,
 ) -> Contact {
-    if let Some((on_segment, on_hull)) = gjk::closest(&capsule.segment, iso_a, hull, iso_b, gizmos)
-    {
+    if let Some((on_segment, on_hull)) = gjk::closest(&capsule.segment, iso_a, hull, iso_b) {
         // If GJK succeeds, the colliders are either disjoint or in shallow penetration.
         let to_hull = on_hull - on_segment;
         let inner_dist = to_hull.length();
@@ -444,9 +443,346 @@ pub fn contact_capsule_sphere(
     }
 }
 
+fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> bool {
+    // Three conditions must hold in order for the arcs to intersect:
+    //
+    // - A and B must lie on opposite sides of the plane through CD.
+    // - C and D must lie on opposite sides of the plane through AB.
+    // - A and D must lie on the same side of the plane through B and C.
+    //
+    // The first two conditions are true if the scalar triple products have opposite signs:
+    //
+    // - [c · (b ⨯ a)] * [d · (b ⨯ a)] < 0
+    // - [a · (d ⨯ c)] * [b · (d ⨯ c)] < 0
+    //
+    // The third condition is true if the scalar triple products have the same sign:
+    //
+    // - [a · (c ⨯ b)] * [d · (c ⨯ b)] > 0
+    //
+    // As an optimization, the scalar triple product identity can be applied to the third test
+    // to use terms from the first two tests:
+    //
+    // - [c · (b ⨯ a)] * [b · (d ⨯ c)] > 0
+
+    let c = iso2 * e2.face_normal();
+    let d = iso2 * e2.reverse().face_normal();
+    let bxa = iso1 * (e1.end() - e1.start());
+
+    let cba = c.dot(bxa);
+    let dba = d.dot(bxa);
+
+    if cba * dba >= 0.0 {
+        return false;
+    }
+
+    let a = iso1 * e1.face_normal();
+    let b = iso1 * e1.reverse().face_normal();
+    let dxc = iso2 * (e2.end() - e2.start());
+
+    let adc = a.dot(dxc);
+    let bdc = b.dot(dxc);
+
+    if adc * bdc >= 0.0 {
+        return false;
+    }
+
+    cba * bdc > 0.0
+}
+
+fn clip_vert_loop(
+    clip_plane: Plane,
+    mut input: impl Iterator<Item = Vec3A>,
+    output: &mut Vec<Vec3A>,
+) {
+    let first = input.next().unwrap();
+    let input = input.chain(iter::once(first));
+
+    let mut start = first;
+    let mut start_inside = clip_plane.distance_to_point(start) >= 0.0;
+
+    for end in input {
+        let end_inside = clip_plane.distance_to_point(end) >= 0.0;
+
+        if start_inside {
+            output.push(start);
+
+            if !end_inside {
+                println!("start = {start}");
+                println!(
+                    "distance to start = {}",
+                    clip_plane.distance_to_point(start)
+                );
+                println!("end = {end}");
+                println!("distance to end = {}", clip_plane.distance_to_point(end));
+                println!("clip_plane = {clip_plane:?}");
+                let clip_v = Line::from_points(start.into(), end.into())
+                    .unwrap()
+                    .intersect_plane(clip_plane)
+                    .unwrap();
+                output.push(clip_v);
+
+                start_inside = false;
+            }
+        } else if end_inside {
+            let clip_v = Line::from_points(start.into(), end.into())
+                .unwrap()
+                .intersect_plane(clip_plane)
+                .unwrap();
+            output.push(clip_v);
+
+            start_inside = true;
+        }
+
+        start = end;
+    }
+}
+
 /// Computes the contact between two hulls.
-fn contact_hull_hull(hull_a: &Hull, iso_a: Isometry, hull_b: &Hull, iso_b: Isometry) -> Contact {
-    todo!()
+pub fn contact_hull_hull(
+    hull_a: &Hull,
+    iso_a: Isometry,
+    hull_b: &Hull,
+    iso_b: Isometry,
+    gizmos: &mut Gizmos,
+) -> Contact {
+    if let Some((on_a, on_b)) = gjk::closest(hull_a, iso_a, hull_b, iso_b) {
+        return Contact::Disjoint(Disjoint {
+            on_a: on_a.into(),
+            on_b: on_b.into(),
+            dist: on_a.distance(on_b),
+        });
+    }
+
+    enum Feature<'a> {
+        Face {
+            ref_face: Face<'a>,
+            ref_iso: Isometry,
+            inc_hull: &'a Hull,
+            inc_iso: Isometry,
+        },
+        Edge {
+            edge_a: Edge<'a>,
+            edge_b: Edge<'a>,
+        },
+    }
+
+    // If GJK fails, locate a separating axis by testing all face normals of both polygons and the
+    // cross products of all edge pairs.
+    let mut best_feature = None;
+    let mut min_depth = f32::INFINITY;
+    let mut contact_normal = Vec3::ZERO;
+
+    // Test all face normals of A.
+    for face in hull_a.iter_faces() {
+        let plane = iso_a * face.plane();
+        let on_b = hull_b.support(iso_b, (-plane.normal).into());
+
+        let depth = -plane.distance_to_point(on_b);
+        if depth >= 0.0 && depth < min_depth {
+            best_feature = Some(Feature::Face {
+                ref_face: face,
+                ref_iso: iso_a,
+                inc_hull: hull_b,
+                inc_iso: iso_b,
+            });
+            min_depth = depth;
+            contact_normal = plane.normal;
+        }
+    }
+
+    // Test all face normals of B.
+    for face in hull_b.iter_faces() {
+        let plane = iso_b * face.plane();
+        let on_a = hull_a.support(iso_a, (-plane.normal).into());
+
+        let depth = -plane.distance_to_point(on_a);
+        if depth >= 0.0 && depth < min_depth {
+            best_feature = Some(Feature::Face {
+                ref_face: face,
+                ref_iso: iso_b,
+                inc_hull: hull_a,
+                inc_iso: iso_a,
+            });
+            min_depth = depth;
+            contact_normal = plane.normal;
+        }
+    }
+
+    // A pair of edges can only produce a separating axis if it builds a face on the Minkowski
+    // difference. An edge pair builds such a face if and only if the arcs produced by those edges
+    // on the hulls' respective Gauss maps intersect.
+    for edge_a in hull_a.iter_edges() {
+        let centroid = iso_a * Vec3A::from(edge_a.face().centroid());
+
+        let start_a = iso_a * edge_a.start();
+        let va = iso_a * (edge_a.end() - edge_a.start());
+
+        let out = iso_a * edge_a.end() - centroid;
+
+        for edge_b in hull_b.iter_edges() {
+            // FIXME: need to negate one set of normals to account for minkowski difference
+            // if !gauss_arcs_intersect(edge_a, iso_a, edge_b, iso_b) {
+            //     continue;
+            // }
+
+            let start_b = iso_b * edge_b.start();
+            let vb = iso_b * (edge_b.end() - edge_b.start());
+
+            let cross = va.cross(vb);
+
+            // Orient the axis from A to B.
+            let axis = if cross.dot(out) > 0.0 { cross } else { -cross };
+            let sep_plane =
+                Plane::from_point_normal(start_a.into(), axis.normalize().into()).unwrap();
+            let depth = -sep_plane.distance_to_point(start_b);
+
+            if depth < min_depth {
+                best_feature = Some(Feature::Edge { edge_a, edge_b });
+                min_depth = depth;
+                contact_normal = axis.into();
+            }
+        }
+    }
+
+    match best_feature.unwrap() {
+        Feature::Face {
+            ref_face,
+            ref_iso,
+            inc_hull,
+            inc_iso,
+        } => {
+            for edge in ref_face.iter_edges() {
+                gizmos.sphere(
+                    (ref_iso * edge.start()).into(),
+                    Quat::IDENTITY,
+                    0.1,
+                    Color::VIOLET,
+                );
+            }
+
+            let ref_plane = ref_iso * ref_face.plane();
+            let ref_normal = ref_plane.normal;
+
+            // Find the most antiparallel face on the incident hull.
+            //
+            // TODO: The supporting point on B found earlier can be used here, as the incident face
+            // has to be adjacent to it.
+            let mut inc_face = None;
+            let mut min_dot = f32::INFINITY;
+            for face in inc_hull.iter_faces() {
+                let normal = inc_iso * face.plane().normal;
+                let dot = ref_normal.dot(normal);
+
+                if dot < min_dot {
+                    min_dot = dot;
+                    inc_face = Some(face);
+                }
+            }
+
+            let inc_face = inc_face.unwrap();
+
+            // Clip the incident face using the reference face.
+            let mut input =
+                Vec::from_iter(inc_face.iter_edges().map(|edge| inc_iso * edge.start()));
+            let mut output = Vec::with_capacity(2 * input.len());
+            for ref_edge in ref_face.iter_edges() {
+                clip_vert_loop(
+                    ref_iso * ref_edge.clip_plane(),
+                    input.drain(..),
+                    &mut output,
+                );
+                (output, input) = (input, output);
+            }
+
+            let clipped = input;
+            println!("clipped.len() = {}", clipped.len());
+
+            // Find the point on the clipped incident face with the greatest penetration depth.
+            let mut deepest = None;
+            let mut max_depth = f32::NEG_INFINITY;
+            for (i, &v) in clipped.iter().enumerate() {
+                let depth = -ref_plane.distance_to_point(v);
+                println!("depth = {depth}");
+                if depth > max_depth {
+                    max_depth = depth;
+                    deepest = Some(i);
+                }
+            }
+            let a = deepest.unwrap();
+
+            if clipped.len() <= 4 {
+                return Contact::Penetrating(Penetrating {
+                    points: ArrayVec::from_iter(clipped.into_iter().map(Vec3::from)),
+                    axis: contact_normal,
+                    depth: max_depth,
+                });
+            }
+
+            // Find the furthest point from the deepest point.
+            let mut furthest = None;
+            let mut max_dist = f32::NEG_INFINITY;
+            for (i, &v) in clipped.iter().enumerate().filter(|&(i, _)| i != a) {
+                let dist = v.distance_squared(clipped[a]);
+                if dist > max_dist {
+                    max_dist = dist;
+                    furthest = Some(i);
+                }
+            }
+            let b = furthest.unwrap();
+
+            // Find two points that produce triangles with the largest area, one in each winding
+            // order (negative area for CW, positive area for CCW).
+            let mut c = None;
+            let mut d = None;
+            let mut max_area = f32::NEG_INFINITY;
+            let mut min_area = f32::INFINITY;
+            for (i, &v) in clipped
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| i != a && i != b)
+            {
+                let va = clipped[a] - v;
+                let vb = clipped[b] - v;
+
+                let area = va.cross(vb).dot(ref_normal.into());
+                if area > max_area {
+                    max_area = area;
+                    c = Some(i);
+                }
+
+                if area < min_area {
+                    min_area = area;
+                    d = Some(i);
+                }
+            }
+            let (c, d) = (c.unwrap(), d.unwrap());
+
+            Contact::Penetrating(Penetrating {
+                points: ArrayVec::from_iter(
+                    [a, b, c, d].map(|i| Vec3::from(ref_plane.project_point(clipped[i]))),
+                ),
+                axis: contact_normal,
+                depth: max_depth,
+            })
+        }
+
+        Feature::Edge {
+            edge_a: on_a,
+            edge_b: on_b,
+        } => {
+            let seg_a = iso_a * Segment::new(on_a.start().into(), on_a.end().into());
+            let seg_b = iso_b * Segment::new(on_b.start().into(), on_b.end().into());
+
+            let points = seg_a.closest_point_to_segment(&seg_b);
+            let mid = 0.5 * (points.first.point + points.second.point);
+
+            Contact::Penetrating(Penetrating {
+                points: ArrayVec::from_iter([mid]),
+                axis: contact_normal,
+                depth: min_depth,
+            })
+        }
+    }
 }
 
 /// Computes the contact between a hull and a sphere.
@@ -458,7 +794,7 @@ pub fn contact_hull_sphere(
     gizmos: &mut Gizmos,
 ) -> Contact {
     // If the sphere center is not interior to the convex hull, GJK suffices to find the contact.
-    if let Some((on_hull, center)) = gjk::closest(hull, iso_a, &sphere.center, iso_b, gizmos) {
+    if let Some((on_hull, center)) = gjk::closest(hull, iso_a, &sphere.center, iso_b) {
         let to_center = center - on_hull;
         let inner_dist = to_center.length();
         let axis = to_center / inner_dist;

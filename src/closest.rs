@@ -44,7 +44,7 @@ pub fn closest_capsule_hull(
     iso_b: Isometry,
     gizmos: &mut Gizmos,
 ) -> Option<(Vec3, Vec3)> {
-    let (on_segment, on_hull) = gjk::closest(&capsule.segment, iso_a, hull, iso_b, gizmos)?;
+    let (on_segment, on_hull) = gjk::closest(&capsule.segment, iso_a, hull, iso_b)?;
 
     let to_hull = on_hull - on_segment;
     let length = to_hull.length();
@@ -96,7 +96,7 @@ pub fn closest_hull_hull(
     iso_b: Isometry,
     gizmos: &mut Gizmos,
 ) -> Option<(Vec3, Vec3)> {
-    let (on_a, on_b) = gjk::closest(hull_a, iso_a, hull_b, iso_b, gizmos)?;
+    let (on_a, on_b) = gjk::closest(hull_a, iso_a, hull_b, iso_b)?;
     Some((on_a.into(), on_b.into()))
 }
 
@@ -108,7 +108,7 @@ pub fn closest_hull_sphere(
     iso_b: Isometry,
     gizmos: &mut Gizmos,
 ) -> Option<(Vec3, Vec3)> {
-    let (on_hull, center) = gjk::closest(hull, iso_a, &sphere.center, iso_b, gizmos)?;
+    let (on_hull, center) = gjk::closest(hull, iso_a, &sphere.center, iso_b)?;
 
     let to_hull = on_hull - center;
     let length = to_hull.length();

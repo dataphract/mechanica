@@ -96,6 +96,18 @@ impl Mul<Plane> for Isometry {
     }
 }
 
+impl Mul<Segment> for Isometry {
+    type Output = Segment;
+
+    #[inline]
+    fn mul(self, rhs: Segment) -> Self::Output {
+        Segment {
+            a: self * rhs.a,
+            b: self * rhs.b,
+        }
+    }
+}
+
 /// A ray.
 pub struct Ray {
     origin: Vec3,
@@ -182,6 +194,21 @@ impl Line {
     #[inline]
     pub fn project_point(&self, point: Vec3) -> f32 {
         self.ray.project_point(point)
+    }
+
+    pub fn intersect_plane(&self, plane: Plane) -> Option<Vec3A> {
+        println!("ray dir: {}", self.ray.dir);
+        println!("plane normal: {}", plane.normal);
+        let denom = self.ray.dir.dot(plane.normal);
+        println!("denom: {denom}");
+
+        if denom.abs() < f32::EPSILON {
+            // TODO: handle planar case
+            return None;
+        }
+
+        let t = (self.ray.origin.dot(plane.normal) + plane.dist) / denom;
+        Some(self.at(t).into())
     }
 }
 
@@ -741,5 +768,12 @@ mod tests {
         assert_eq!(pos_x.side(Vec3::X), PlaneSide::Front);
         assert_eq!(pos_x.side(-Vec3::X), PlaneSide::Back);
         assert_eq!(pos_x.side(Vec3::ZERO), PlaneSide::Planar);
+    }
+
+    #[test]
+    fn line_intersect_plane() {
+        let line = Line::from_point_dir(Vec3::ZERO, Vec3::X).unwrap();
+        let plane = Plane::from_point_normal(Vec3::ZERO, Vec3::X).unwrap();
+        assert_eq!(line.intersect_plane(plane), Some(Vec3A::ZERO));
     }
 }

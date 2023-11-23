@@ -17,8 +17,8 @@ use bevy_transform_gizmo::{GizmoPickSource, GizmoTransformable};
 use cg3::{
     collider::ColliderShape,
     contact::{
-        contact_capsule_capsule, contact_capsule_hull, contact_capsule_sphere, contact_hull_sphere,
-        contact_sphere_sphere, Contact,
+        contact_capsule_capsule, contact_capsule_hull, contact_capsule_sphere, contact_hull_hull,
+        contact_hull_sphere, contact_sphere_sphere, Contact,
     },
     hull::Hull,
     Capsule, Isometry, Segment, Sphere,
@@ -68,7 +68,7 @@ fn setup(mut commands: Commands) {
     commands
         .spawn(Camera3dBundle {
             projection: Projection::Perspective(default()),
-            transform: Transform::from_xyz(5.0, 1.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         })
         .insert(EditorCamera {
@@ -283,8 +283,7 @@ fn update_contact_vis(
             }
 
             (ColliderShape::Hull(h1), ColliderShape::Hull(h2)) => {
-                continue;
-                // closest_hull_hull(h1, a_iso, h2, b_iso)
+                contact_hull_hull(h1, a_iso, h2, b_iso, &mut gizmos)
             }
         };
 
@@ -564,8 +563,8 @@ fn control_camera(
             }
 
             OrbitOrPan::Pan => {
-                // TODO: Mouse acceleration can cause the cursor to move relative to the focal
-                // point. Blender avoids this somehow.
+                // TODO: pan by raycasting against the plane parallel to the camera which contains
+                // the focus point.
 
                 let mut pan = mouse_motion;
 

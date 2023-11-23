@@ -1,10 +1,9 @@
 //! The Gilbert-Johnson-Keerthi least distance algorithm.
-use bevy::prelude::{Color, Gizmos};
 //
 // Implementation based on "A Fast and Robust GJK Implementation for Collision Detection of Convex
 // Objects" by Gino van den Bergen (https://doi.org/10.1080/10867651.1999.10487502).
 //
-use glam::{Quat, Vec3, Vec3A};
+use glam::{Vec3, Vec3A};
 
 use crate::{hull::Hull, Isometry, Segment, Sphere};
 
@@ -22,7 +21,6 @@ pub fn closest<T, U>(
     iso_a: Isometry,
     obj_b: &U,
     iso_b: Isometry,
-    gizmos: &mut Gizmos,
 ) -> Option<(Vec3A, Vec3A)>
 where
     T: Support,
