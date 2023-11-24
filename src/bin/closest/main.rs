@@ -1,16 +1,13 @@
-use std::{iter, ops::RangeInclusive};
+use std::iter;
 
 use arrayvec::ArrayVec;
 use bevy::{
     ecs::system::SystemParam,
-    input::mouse::{MouseMotion, MouseWheel},
+    input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel},
     prelude::*,
     window::{CursorGrabMode, PrimaryWindow},
 };
-use bevy_egui::{
-    egui::{self, emath},
-    EguiContexts, EguiPlugin,
-};
+use bevy_egui::EguiPlugin;
 use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
 use bevy_mod_picking::{prelude::*, PickableBundle};
 use bevy_transform_gizmo::{GizmoPickSource, GizmoTransformable};
@@ -20,9 +17,10 @@ use cg3::{
         contact_capsule_capsule, contact_capsule_hull, contact_capsule_sphere, contact_hull_hull,
         contact_hull_sphere, contact_sphere_sphere, Contact,
     },
-    hull::Hull,
-    Capsule, Isometry, Segment, Sphere,
+    Isometry, Sphere,
 };
+
+mod ui;
 
 fn main() {
     App::new()
@@ -36,11 +34,17 @@ fn main() {
         .add_systems(Update, init_physobj)
         .add_systems(Update, init_contact_vis)
         .add_systems(Update, control_camera)
-        .add_systems(Update, render_ui)
+        .add_systems(Update, ui::render_ui)
         .add_systems(Update, update_physobj)
         .add_systems(Update, update_contact_vis)
         .run();
 }
+
+#[derive(Component)]
+struct ObjA;
+
+#[derive(Component)]
+struct ObjB;
 
 #[derive(Component)]
 struct Collider {
@@ -68,7 +72,7 @@ fn setup(mut commands: Commands) {
     commands
         .spawn(Camera3dBundle {
             projection: Projection::Perspective(default()),
-            transform: Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0.0, 2.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         })
         .insert(EditorCamera {
@@ -98,6 +102,7 @@ fn setup(mut commands: Commands) {
             }),
         })
         .insert(Transform::from_xyz(-2.0, 1.0, 0.0))
+        .insert(ObjA)
         .id();
 
     let obj2 = commands
@@ -109,6 +114,7 @@ fn setup(mut commands: Commands) {
             }),
         })
         .insert(Transform::from_xyz(2.0, 1.0, 0.0))
+        .insert(ObjB)
         .id();
 
     commands.spawn_empty().insert(ContactPair {
@@ -327,141 +333,6 @@ fn update_contact_vis(
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum ShapeSel {
-    Sphere,
-    Capsule,
-    Hull,
-}
-
-fn label_slider<N: emath::Numeric>(
-    ui: &mut egui::Ui,
-    label: &str,
-    var: &mut N,
-    range: RangeInclusive<N>,
-) {
-    ui.horizontal(|ui| {
-        ui.add(egui::widgets::Label::new(label));
-        ui.add(egui::widgets::Slider::new(var, range));
-    });
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-struct CapsuleParams {
-    length: f32,
-    radius: f32,
-}
-
-impl Default for CapsuleParams {
-    fn default() -> Self {
-        Self {
-            length: 1.0,
-            radius: 0.5,
-        }
-    }
-}
-
-fn render_ui(
-    mut egui_cx: EguiContexts,
-    selected: Query<(Entity, &PickSelection), With<PhysObj>>,
-    mut objs: Query<&mut PhysObj>,
-    mut last_selected: Local<Option<Entity>>,
-    mut box_dims: Local<Vec3>,
-    mut capsule_params: Local<CapsuleParams>,
-) {
-    if *box_dims == Vec3::ZERO {
-        *box_dims = Vec3::splat(1.0);
-    }
-
-    for (ent, sel) in selected.iter() {
-        if sel.is_selected {
-            last_selected.replace(ent);
-            break;
-        }
-    }
-
-    let ctx = egui_cx.ctx_mut();
-    egui::SidePanel::right("Contact testbed").show(ctx, |ui| {
-        ui.label("Contact testbed");
-        ui.separator();
-
-        let mut obj = match last_selected.and_then(|sel| objs.get_mut(sel).ok()) {
-            Some(o) => o,
-            None => {
-                ui.label("Select an object to modify it!");
-                return;
-            }
-        };
-
-        let mut shape_sel = match obj.shape {
-            ColliderShape::Sphere(_) => ShapeSel::Sphere,
-            ColliderShape::Capsule(_) => ShapeSel::Capsule,
-            ColliderShape::Hull(_) => ShapeSel::Hull,
-        };
-
-        egui::ComboBox::from_label("Shape")
-            .selected_text(format!("{shape_sel:?}"))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut shape_sel, ShapeSel::Sphere, "Sphere");
-                ui.selectable_value(&mut shape_sel, ShapeSel::Capsule, "Capsule");
-                ui.selectable_value(&mut shape_sel, ShapeSel::Hull, "Hull");
-            });
-
-        ui.separator();
-
-        match shape_sel {
-            ShapeSel::Sphere => {
-                let mut radius = if let ColliderShape::Sphere(s) = &obj.shape {
-                    s.radius
-                } else {
-                    0.5
-                };
-
-                let old_radius = radius;
-                label_slider(ui, "Radius", &mut radius, 0.1..=2.0);
-
-                if !matches!(&obj.shape, ColliderShape::Sphere(_)) || radius != old_radius {
-                    obj.shape = ColliderShape::Sphere(Sphere {
-                        center: Vec3::ZERO,
-                        radius,
-                    });
-                }
-            }
-
-            ShapeSel::Capsule => {
-                let old_params = *capsule_params;
-
-                label_slider(ui, "Length", &mut capsule_params.length, 0.2..=4.0);
-                label_slider(ui, "Radius", &mut capsule_params.radius, 0.1..=1.0);
-
-                if *capsule_params != old_params || !matches!(&obj.shape, ColliderShape::Capsule(_))
-                {
-                    obj.shape = ColliderShape::Capsule(Capsule {
-                        segment: Segment {
-                            a: 0.5 * capsule_params.length * Vec3::Y,
-                            b: -0.5 * capsule_params.length * Vec3::Y,
-                        },
-                        radius: capsule_params.radius,
-                    });
-                }
-            }
-
-            ShapeSel::Hull => {
-                let old_dims = *box_dims;
-
-                label_slider(ui, "Width", &mut box_dims[0], 0.1..=2.0);
-                label_slider(ui, "Height", &mut box_dims[1], 0.1..=2.0);
-                label_slider(ui, "Depth", &mut box_dims[2], 0.1..=2.0);
-
-                if *box_dims != old_dims || !matches!(&obj.shape, ColliderShape::Hull(_)) {
-                    //obj.shape = ColliderShape::Hull(Hull::tetrahedron(2.0));
-                    obj.shape = ColliderShape::Hull(Hull::cuboid(*box_dims));
-                }
-            }
-        }
-    });
-}
-
 #[derive(Component)]
 struct SolidShadingLight;
 
@@ -497,8 +368,6 @@ fn control_camera(
     );
     let win_scale_factor = win_phys_resolution.recip();
 
-    let orbit_button = MouseButton::Middle;
-
     enum OrbitOrPan {
         Orbit,
         Pan,
@@ -507,7 +376,9 @@ fn control_camera(
     let mut orbit_or_pan = OrbitOrPan::Orbit;
     let mut mouse_motion = Vec2::ZERO;
 
-    if camera_input.mouse_button.pressed(orbit_button) {
+    if camera_input.mouse_button.pressed(MouseButton::Middle)
+        || camera_input.key_input.pressed(KeyCode::Space)
+    {
         window.cursor.grab_mode = CursorGrabMode::Confined;
 
         for evt in camera_input.mouse_motion.iter() {
@@ -548,7 +419,13 @@ fn control_camera(
         window.cursor.grab_mode = CursorGrabMode::None;
     }
 
-    let scroll: f32 = camera_input.mouse_wheel.iter().map(|evt| evt.y).sum();
+    let scroll: f32 = camera_input
+        .mouse_wheel
+        .iter()
+        .fold(0.0, |acc, evt| match evt.unit {
+            MouseScrollUnit::Line => acc + evt.y,
+            MouseScrollUnit::Pixel => acc + evt.y / 32.0,
+        });
 
     let (mut cam, mut transform, proj) = camera.get_single_mut().unwrap();
 

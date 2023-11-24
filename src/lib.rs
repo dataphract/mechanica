@@ -214,14 +214,14 @@ impl Line {
 
 #[derive(Clone, Debug)]
 pub struct Segment {
-    pub a: Vec3,
-    pub b: Vec3,
+    pub a: Vec3A,
+    pub b: Vec3A,
 }
 
 /// The closest point on a given segment to some other primitive.
 pub struct SegmentClosest {
     /// The closest point on the segment to the other primitive.
-    pub point: Vec3,
+    pub point: Vec3A,
 
     /// The parameter value obtained by projecting the closest point on the other primitive onto
     /// the segment.
@@ -240,7 +240,7 @@ pub struct SegmentClosestPair {
 }
 
 impl Segment {
-    pub fn new(a: Vec3, b: Vec3) -> Segment {
+    pub fn new(a: Vec3A, b: Vec3A) -> Segment {
         Segment { a, b }
     }
 
@@ -262,7 +262,7 @@ impl Segment {
     }
 
     /// Finds the point on the segment closest to `c`.
-    pub fn closest_point_to_point(&self, c: Vec3) -> SegmentClosest {
+    pub fn closest_point_to_point(&self, c: Vec3A) -> SegmentClosest {
         let ab = self.b - self.a;
         let t = (c - self.a).dot(ab) / ab.length_squared();
         let t_clamp = t.clamp(0.0, 1.0);
@@ -521,8 +521,9 @@ pub struct Capsule {
 
 impl Capsule {
     pub fn intersects_sphere(&self, sphere: &Sphere) -> bool {
-        let closest = self.segment.closest_point_to_point(sphere.center);
-        (sphere.center - closest.point).length_squared() <= self.radius.powi(2)
+        let center = sphere.center.into();
+        let closest = self.segment.closest_point_to_point(center);
+        (center - closest.point).length_squared() <= self.radius.powi(2)
     }
 
     pub fn intersects_capsule(&self, other: &Capsule) -> bool {
@@ -650,7 +651,7 @@ impl Obb {
 
         // Axes of `other`.
         let ra: Vec3A = abs_other_to_local
-            .transpose_mul_vec3(self.half_extents)
+            .transpose_mul_vec3a(self.half_extents.into())
             .into();
         let rb: Vec3A = other.half_extents.into();
         if other_translate.abs().cmpgt(ra + rb).any() {
@@ -734,7 +735,7 @@ impl Obb {
 
     /// Computes the supporting point of the `Obb` in the direction given by `dir`.
     pub fn compute_support(&self, dir: Vec3) -> Vec3 {
-        let local_dir: Vec3A = self.local_to_world.transpose_mul_vec3(dir).into();
+        let local_dir: Vec3A = self.local_to_world.transpose_mul_vec3a(dir.into()).into();
         let half: Vec3A = self.half_extents.into();
         let local_support: Vec3 = Vec3A::select(local_dir.cmpge(Vec3A::ZERO), half, -half).into();
         self.local_to_world * local_support

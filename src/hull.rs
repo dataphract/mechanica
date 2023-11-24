@@ -10,7 +10,7 @@ use bevy::{
 use glam::{Vec3, Vec3A};
 use hashbrown::HashSet;
 
-use crate::{Isometry, Plane};
+use crate::{Isometry, Plane, Segment};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VertIdx(u32);
@@ -655,14 +655,44 @@ impl<'hull> Edge<'hull> {
     }
 
     #[inline]
-    pub fn start(&self) -> Vec3A {
+    fn start_local(&self) -> Vec3A {
         let vi = self.hull.edges[self.idx as usize].vertex;
-        self.hull.vertices[vi].into()
+        Vec3A::from(self.hull.vertices[vi])
     }
 
     #[inline]
-    pub fn end(&self) -> Vec3A {
-        self.reverse().start()
+    pub fn start(&self, iso: Isometry) -> Vec3A {
+        iso * self.start_local()
+    }
+
+    #[inline]
+    fn end_local(&self) -> Vec3A {
+        self.reverse().start_local()
+    }
+
+    #[inline]
+    pub fn end(&self, iso: Isometry) -> Vec3A {
+        iso * self.end_local()
+    }
+
+    #[inline]
+    pub fn vector_local(&self) -> Vec3A {
+        self.end_local() - self.start_local()
+    }
+
+    #[inline]
+    pub fn vector(&self, iso: Isometry) -> Vec3A {
+        iso * self.vector_local()
+    }
+
+    #[inline]
+    pub fn segment_local(&self) -> Segment {
+        Segment::new(self.start_local(), self.end_local())
+    }
+
+    #[inline]
+    pub fn segment(&self, iso: Isometry) -> Segment {
+        Segment::new(self.start(iso), self.end(iso))
     }
 
     #[inline]
@@ -674,36 +704,13 @@ impl<'hull> Edge<'hull> {
     }
 
     #[inline]
-    pub fn clip_plane(&self) -> Plane {
+    pub fn clip_plane(&self, iso: Isometry) -> Plane {
+        let start = self.start(iso);
+
         // TODO: precompute and store the clip plane normal?
-        let normal = self
-            .face_normal()
-            .cross(self.end() - self.start())
-            .normalize();
-        Plane::from_point_normal(self.start().into(), normal.into()).unwrap()
+        let normal = iso * self.face_normal().cross(self.vector_local());
+        let normal = normal.normalize();
+
+        Plane::from_point_normal(start.into(), normal.into()).unwrap()
     }
 }
-
-macro_rules! create_hull {
-    (
-        verts: [
-            $([$x:expr, $y:expr, $z:expr]),* $(,)?
-        ],
-
-        edges: [
-            $(($v0:expr, $v1:expr)),* $(,)?
-        ],
-
-        faces: [
-            $([$first:expr, $($rest:expr),* $(,)?]),* $(,)?
-        ] $(,)?
-    ) => {
-
-        let verts = vec![$(Vec3::new($x, $y, $z)),*];
-
-        // TODO
-    };
-}
-
-#[cfg(test)]
-mod tests {}

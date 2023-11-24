@@ -8,6 +8,7 @@ use glam::{Quat, Vec3, Vec3A};
 
 use crate::{
     gjk::{self, Support},
+    glam_ext::Vec3AExt,
     hull::{Edge, Face, Hull},
     Capsule, Isometry, Line, Plane, Segment, Sphere,
 };
@@ -287,7 +288,7 @@ pub fn contact_capsule_hull(
         let mut clip_b = capsule_b;
 
         loop {
-            let clip_plane = iso_b * edge.clip_plane();
+            let clip_plane = edge.clip_plane(iso_b);
 
             clip_a = clip_plane.clamp_point(clip_a);
             clip_b = clip_plane.clamp_point(clip_b);
@@ -326,8 +327,8 @@ pub fn contact_capsule_hull(
     // Test whether any cross product between the capsule segment and a hull edge gives a smaller
     // penetration depth.
     for edge in hull.iter_edges() {
-        let edge_a = iso_b * edge.start();
-        let edge_b = iso_b * edge.end();
+        let edge_a = edge.start(iso_b);
+        let edge_b = edge.end(iso_b);
 
         // Find the closest points on the capsule segment and the edge.
         let capsule_segment = Segment::new(capsule_a.into(), capsule_b.into());
@@ -346,7 +347,11 @@ pub fn contact_capsule_hull(
         }
 
         let inner_depth = points.distance_squared.sqrt();
-        gizmos.ray(points.second.point, contact_normal.into(), Color::GREEN);
+        gizmos.ray(
+            points.second.point.into(),
+            contact_normal.into(),
+            Color::GREEN,
+        );
 
         if inner_depth < min_depth {
             min_depth = inner_depth;
@@ -466,7 +471,7 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
 
     let c = iso2 * e2.face_normal();
     let d = iso2 * e2.reverse().face_normal();
-    let bxa = iso1 * (e1.end() - e1.start());
+    let bxa = e1.vector(iso1);
 
     let cba = c.dot(bxa);
     let dba = d.dot(bxa);
@@ -477,7 +482,7 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
 
     let a = iso1 * e1.face_normal();
     let b = iso1 * e1.reverse().face_normal();
-    let dxc = iso2 * (e2.end() - e2.start());
+    let dxc = e2.vector(iso2);
 
     let adc = a.dot(dxc);
     let bdc = b.dot(dxc);
@@ -614,10 +619,10 @@ pub fn contact_hull_hull(
     for edge_a in hull_a.iter_edges() {
         let centroid = iso_a * Vec3A::from(edge_a.face().centroid());
 
-        let start_a = iso_a * edge_a.start();
-        let va = iso_a * (edge_a.end() - edge_a.start());
+        let start_a = edge_a.start(iso_a);
+        let va = edge_a.vector(iso_a);
 
-        let out = iso_a * edge_a.end() - centroid;
+        let out = edge_a.end(iso_a) - centroid;
 
         for edge_b in hull_b.iter_edges() {
             // FIXME: need to negate one set of normals to account for minkowski difference
@@ -625,8 +630,13 @@ pub fn contact_hull_hull(
             //     continue;
             // }
 
-            let start_b = iso_b * edge_b.start();
-            let vb = iso_b * (edge_b.end() - edge_b.start());
+            let start_b = edge_b.start(iso_b);
+            let vb = edge_b.vector(iso_b);
+
+            if va.is_parallel_to(vb) {
+                // Can't build a face on the Minkowski difference.
+                continue;
+            }
 
             let cross = va.cross(vb);
 
@@ -653,7 +663,7 @@ pub fn contact_hull_hull(
         } => {
             for edge in ref_face.iter_edges() {
                 gizmos.sphere(
-                    (ref_iso * edge.start()).into(),
+                    edge.start(ref_iso).into(),
                     Quat::IDENTITY,
                     0.1,
                     Color::VIOLET,
@@ -682,15 +692,10 @@ pub fn contact_hull_hull(
             let inc_face = inc_face.unwrap();
 
             // Clip the incident face using the reference face.
-            let mut input =
-                Vec::from_iter(inc_face.iter_edges().map(|edge| inc_iso * edge.start()));
+            let mut input = Vec::from_iter(inc_face.iter_edges().map(|edge| edge.start(inc_iso)));
             let mut output = Vec::with_capacity(2 * input.len());
             for ref_edge in ref_face.iter_edges() {
-                clip_vert_loop(
-                    ref_iso * ref_edge.clip_plane(),
-                    input.drain(..),
-                    &mut output,
-                );
+                clip_vert_loop(ref_edge.clip_plane(ref_iso), input.drain(..), &mut output);
                 (output, input) = (input, output);
             }
 
@@ -770,14 +775,14 @@ pub fn contact_hull_hull(
             edge_a: on_a,
             edge_b: on_b,
         } => {
-            let seg_a = iso_a * Segment::new(on_a.start().into(), on_a.end().into());
-            let seg_b = iso_b * Segment::new(on_b.start().into(), on_b.end().into());
+            let seg_a = on_a.segment(iso_a);
+            let seg_b = on_b.segment(iso_b);
 
             let points = seg_a.closest_point_to_segment(&seg_b);
             let mid = 0.5 * (points.first.point + points.second.point);
 
             Contact::Penetrating(Penetrating {
-                points: ArrayVec::from_iter([mid]),
+                points: ArrayVec::from_iter([mid.into()]),
                 axis: contact_normal,
                 depth: min_depth,
             })
