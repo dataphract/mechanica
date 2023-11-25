@@ -471,7 +471,7 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
 
     let c = iso2 * e2.face_normal();
     let d = iso2 * e2.reverse().face_normal();
-    let bxa = e1.vector(iso1);
+    let bxa = e1.dir(iso1.rotation);
 
     let cba = c.dot(bxa);
     let dba = d.dot(bxa);
@@ -482,7 +482,7 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
 
     let a = iso1 * e1.face_normal();
     let b = iso1 * e1.reverse().face_normal();
-    let dxc = e2.vector(iso2);
+    let dxc = e2.dir(iso2.rotation);
 
     let adc = a.dot(dxc);
     let bdc = b.dot(dxc);
@@ -494,6 +494,7 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
     cba * bdc > 0.0
 }
 
+// One round of Sutherland-Hodgman clipping.
 fn clip_vert_loop(
     clip_plane: Plane,
     mut input: impl Iterator<Item = Vec3A>,
@@ -512,18 +513,11 @@ fn clip_vert_loop(
             output.push(start);
 
             if !end_inside {
-                println!("start = {start}");
-                println!(
-                    "distance to start = {}",
-                    clip_plane.distance_to_point(start)
-                );
-                println!("end = {end}");
-                println!("distance to end = {}", clip_plane.distance_to_point(end));
-                println!("clip_plane = {clip_plane:?}");
                 let clip_v = Line::from_points(start.into(), end.into())
                     .unwrap()
                     .intersect_plane(clip_plane)
                     .unwrap();
+
                 output.push(clip_v);
 
                 start_inside = false;
@@ -533,6 +527,7 @@ fn clip_vert_loop(
                 .unwrap()
                 .intersect_plane(clip_plane)
                 .unwrap();
+
             output.push(clip_v);
 
             start_inside = true;
@@ -620,7 +615,7 @@ pub fn contact_hull_hull(
         let centroid = iso_a * Vec3A::from(edge_a.face().centroid());
 
         let start_a = edge_a.start(iso_a);
-        let va = edge_a.vector(iso_a);
+        let va = edge_a.dir(iso_a.rotation);
 
         let out = edge_a.end(iso_a) - centroid;
 
@@ -631,7 +626,7 @@ pub fn contact_hull_hull(
             // }
 
             let start_b = edge_b.start(iso_b);
-            let vb = edge_b.vector(iso_b);
+            let vb = edge_b.dir(iso_b.rotation);
 
             if va.is_parallel_to(vb) {
                 // Can't build a face on the Minkowski difference.
@@ -646,7 +641,7 @@ pub fn contact_hull_hull(
                 Plane::from_point_normal(start_a.into(), axis.normalize().into()).unwrap();
             let depth = -sep_plane.distance_to_point(start_b);
 
-            if depth < min_depth {
+            if depth >= 0.0 && depth < min_depth {
                 best_feature = Some(Feature::Edge { edge_a, edge_b });
                 min_depth = depth;
                 contact_normal = axis.into();
@@ -694,8 +689,12 @@ pub fn contact_hull_hull(
             // Clip the incident face using the reference face.
             let mut input = Vec::from_iter(inc_face.iter_edges().map(|edge| edge.start(inc_iso)));
             let mut output = Vec::with_capacity(2 * input.len());
-            for ref_edge in ref_face.iter_edges() {
+            for (i, ref_edge) in ref_face.iter_edges().enumerate() {
+                println!("CLIPPING (round {i}) ==============================");
+                let num_in = input.len();
                 clip_vert_loop(ref_edge.clip_plane(ref_iso), input.drain(..), &mut output);
+                let num_out = output.len();
+                println!("Clipped {num_in} -> {num_out}");
                 (output, input) = (input, output);
             }
 
@@ -776,7 +775,12 @@ pub fn contact_hull_hull(
             edge_b: on_b,
         } => {
             let seg_a = on_a.segment(iso_a);
+            gizmos.sphere(seg_a.a.into(), Quat::IDENTITY, 0.1, Color::GREEN);
+            gizmos.sphere(seg_a.b.into(), Quat::IDENTITY, 0.1, Color::GREEN);
+
             let seg_b = on_b.segment(iso_b);
+            gizmos.sphere(seg_b.a.into(), Quat::IDENTITY, 0.1, Color::VIOLET);
+            gizmos.sphere(seg_b.b.into(), Quat::IDENTITY, 0.1, Color::VIOLET);
 
             let points = seg_a.closest_point_to_segment(&seg_b);
             let mid = 0.5 * (points.first.point + points.second.point);

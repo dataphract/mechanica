@@ -2,7 +2,7 @@ use std::{hash::Hash, ops::RangeInclusive};
 
 use bevy::prelude::*;
 use bevy_egui::{
-    egui::{self, emath, style::Spacing},
+    egui::{self, emath},
     EguiContexts,
 };
 use cg3::{collider::ColliderShape, hull::Hull, Capsule, Segment, Sphere};

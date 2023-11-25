@@ -28,6 +28,9 @@ fn main() {
         .add_plugins(InfiniteGridPlugin)
         .add_plugins(EguiPlugin)
         .add_plugins(bevy_mod_picking::DefaultPickingPlugins)
+        .insert_resource(State::new(
+            bevy_mod_picking::debug::DebugPickingMode::Disabled,
+        ))
         .add_plugins(bevy_transform_gizmo::TransformGizmoPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(PostStartup, post_startup)

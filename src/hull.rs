@@ -647,6 +647,8 @@ impl<'hull> Edge<'hull> {
         self.hull.face_normals[self.hull.edges[self.idx as usize].face as usize].into()
     }
 
+    /// Returns the directed edge in the opposite direction.
+    #[inline]
     pub fn reverse(&self) -> Edge {
         Edge {
             hull: self.hull,
@@ -660,29 +662,34 @@ impl<'hull> Edge<'hull> {
         Vec3A::from(self.hull.vertices[vi])
     }
 
+    /// Returns the position of the edge's starting vertex, transformed by `iso`.
     #[inline]
     pub fn start(&self, iso: Isometry) -> Vec3A {
         iso * self.start_local()
     }
 
+    /// Returns the position of the edge's end vertex in local space.
     #[inline]
-    fn end_local(&self) -> Vec3A {
+    pub fn end_local(&self) -> Vec3A {
         self.reverse().start_local()
     }
 
+    /// Returns the position of the edge's end vertex, transformed by `iso`.
     #[inline]
     pub fn end(&self, iso: Isometry) -> Vec3A {
         iso * self.end_local()
     }
 
+    /// Returns the direction vector of the edge in local space.
     #[inline]
-    pub fn vector_local(&self) -> Vec3A {
+    pub fn dir_local(&self) -> Vec3A {
         self.end_local() - self.start_local()
     }
 
+    /// Returns the direction vector of the edge, rotated by `rotation`.
     #[inline]
-    pub fn vector(&self, iso: Isometry) -> Vec3A {
-        iso * self.vector_local()
+    pub fn dir(&self, rotation: Quat) -> Vec3A {
+        rotation * self.dir_local()
     }
 
     #[inline]
@@ -708,7 +715,7 @@ impl<'hull> Edge<'hull> {
         let start = self.start(iso);
 
         // TODO: precompute and store the clip plane normal?
-        let normal = iso * self.face_normal().cross(self.vector_local());
+        let normal = iso.rotation * self.face_normal().cross(self.dir_local());
         let normal = normal.normalize();
 
         Plane::from_point_normal(start.into(), normal.into()).unwrap()
