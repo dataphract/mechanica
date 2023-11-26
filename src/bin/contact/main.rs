@@ -19,6 +19,8 @@ use cg3::{
     },
     Isometry, Sphere,
 };
+use glam::Vec3A;
+use rand::Rng;
 
 mod ui;
 
@@ -40,6 +42,7 @@ fn main() {
         .add_systems(Update, ui::render_ui)
         .add_systems(Update, update_physobj)
         .add_systems(Update, update_contact_vis)
+        .add_systems(Update, draw_zorder)
         .run();
 }
 
@@ -471,4 +474,51 @@ fn control_camera(
 
     let mut solid_light = solid_shading_light.get_single_mut().unwrap();
     *solid_light = Transform::from_rotation(transform.rotation);
+}
+
+struct ZOrderPoints {
+    points: Vec<Vec3A>,
+}
+
+impl Default for ZOrderPoints {
+    fn default() -> Self {
+        let mut v = Vec::new();
+
+        const SEED: [u8; 32] = [
+            0x4c, 0x64, 0x43, 0x4e, 0xb8, 0x8d, 0x56, 0xf7, 0x73, 0xb2, 0x6a, 0xb0, 0x52, 0xcc,
+            0x0b, 0xac, 0x11, 0x42, 0x1b, 0xad, 0xfe, 0xb4, 0x67, 0xa7, 0x05, 0x70, 0x0f, 0xe0,
+            0x35, 0x1b, 0xbe, 0x2b,
+        ];
+
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::from_seed(SEED);
+
+        for _ in 0..(128 * 1024) {
+            v.push(Vec3A::new(
+                16.0 * (-0.5 + rng.gen::<f32>()),
+                16.0 * (-0.5 + rng.gen::<f32>()),
+                16.0 * (-0.5 + rng.gen::<f32>()),
+            ))
+        }
+
+        cg3::zorder::sort_z_order(&mut v);
+
+        Self { points: v }
+    }
+}
+
+fn draw_zorder(points: Local<ZOrderPoints>, mut gizmos: Gizmos) {
+    let len = points.points.len();
+    gizmos.linestrip_gradient(points.points.iter().enumerate().map(|(idx, &pt)| {
+        let hue = 360.0 * (idx as f32 / len as f32);
+        (
+            pt.into(),
+            Color::Hsla {
+                hue,
+                saturation: 1.0,
+                lightness: 0.5,
+                alpha: 1.0,
+            },
+        )
+    }))
 }

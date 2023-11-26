@@ -1,6 +1,6 @@
+/// A dynamic bounding-volume hierarchy implemented as an AABB tree.
 // Implementation based on Erin Catto's 2019 GDC talk on Dynamic AABB Trees:
 // https://box2d.org/files/ErinCatto_DynamicBVH_GDC2019.pdf
-
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, VecDeque},

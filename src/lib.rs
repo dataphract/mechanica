@@ -1,4 +1,5 @@
 //! A computational geometry library for 3D applications.
+#![cfg_attr(feature = "portable_simd", feature(portable_simd))]
 
 use std::{cmp::Ordering, ops::Mul};
 
@@ -13,13 +14,11 @@ pub mod bvh;
 pub mod closest;
 pub mod collider;
 pub mod contact;
-pub mod gauss;
 pub mod gjk;
 mod glam_ext;
 pub mod hull;
-pub mod mesh_edit;
 pub mod nmesh;
-pub mod sat;
+pub mod zorder;
 
 #[doc(inline)]
 pub use aabb::Aabb;

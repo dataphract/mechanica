@@ -1,3 +1,4 @@
+/// Operations on convex polyhedra.
 use std::{
     ops::{Index, IndexMut},
     ptr,
@@ -278,6 +279,7 @@ impl Hull {
         }
     }
 
+    /// Returns an axis-aligned rectangular cuboid with the specified half-extents.
     pub fn cuboid(half_extents: Vec3) -> Hull {
         let hx = 0.5 * half_extents.x;
         let hy = 0.5 * half_extents.y;
@@ -548,7 +550,8 @@ impl Hull {
     // }
 }
 
-pub(crate) struct Face<'hull> {
+/// A face on a convex polygon.
+pub struct Face<'hull> {
     hull: &'hull Hull,
     first_edge: EdgeIndex,
     normal: Vec3,
@@ -562,7 +565,8 @@ impl<'hull> Face<'hull> {
         }
     }
 
-    pub(crate) fn iter_edges(&self) -> FaceEdges<'hull> {
+    /// Returns an iterator over the directed edges of the face.
+    pub fn iter_edges(&self) -> FaceEdges<'hull> {
         FaceEdges {
             hull: self.hull,
             first_edge: self.first_edge,
@@ -570,7 +574,8 @@ impl<'hull> Face<'hull> {
         }
     }
 
-    pub(crate) fn centroid(&self) -> Vec3 {
+    /// Computes and returns the centroid of the face.
+    pub fn centroid_local(&self) -> Vec3 {
         let mut edge = &self.hull.edges[self.first_edge as usize];
         let mut sum = Vec3A::ZERO;
         let mut count = 0;
@@ -588,12 +593,17 @@ impl<'hull> Face<'hull> {
         (sum / count as f32).into()
     }
 
-    pub(crate) fn plane(&self) -> Plane {
+    /// Computes and returns the centroid of the face, transformed by `transform`.
+    pub(crate) fn centroid(&self, transform: Isometry) -> Vec3 {
+        transform * self.centroid_local()
+    }
+
+    pub(crate) fn plane(&self, transform: Isometry) -> Plane {
         let edge = &self.hull.edges[self.first_edge as usize];
         let vert = self.hull.vertices[edge.vertex];
 
         // TODO: add unchecked version, check verts and normals at hull construction time
-        Plane::from_point_normal(vert, self.normal).unwrap()
+        Plane::from_point_normal(transform * vert, transform.rotation * self.normal).unwrap()
     }
 }
 
@@ -639,12 +649,18 @@ impl<'hull> Edge<'hull> {
         Face {
             hull: self.hull,
             first_edge: self.hull.faces[self.hull.edges[self.idx as usize].face as usize],
-            normal: self.face_normal().into(),
+            normal: self.face_normal_local().into(),
         }
     }
 
-    pub fn face_normal(&self) -> Vec3A {
+    #[inline]
+    pub fn face_normal_local(&self) -> Vec3A {
         self.hull.face_normals[self.hull.edges[self.idx as usize].face as usize].into()
+    }
+
+    #[inline]
+    pub fn face_normal(&self, rotation: Quat) -> Vec3A {
+        rotation * self.face_normal_local()
     }
 
     /// Returns the directed edge in the opposite direction.
@@ -656,8 +672,9 @@ impl<'hull> Edge<'hull> {
         }
     }
 
+    /// Returns the start position of the directed edge in local space.
     #[inline]
-    fn start_local(&self) -> Vec3A {
+    pub fn start_local(&self) -> Vec3A {
         let vi = self.hull.edges[self.idx as usize].vertex;
         Vec3A::from(self.hull.vertices[vi])
     }
@@ -692,11 +709,13 @@ impl<'hull> Edge<'hull> {
         rotation * self.dir_local()
     }
 
+    /// Returns the edge represented as a line segment in local space.
     #[inline]
     pub fn segment_local(&self) -> Segment {
         Segment::new(self.start_local(), self.end_local())
     }
 
+    /// Returns the edge represented as a line segment, transformed by `iso`.
     #[inline]
     pub fn segment(&self, iso: Isometry) -> Segment {
         Segment::new(self.start(iso), self.end(iso))
@@ -710,12 +729,14 @@ impl<'hull> Edge<'hull> {
         }
     }
 
+    /// Returns a plane whose normal is parallel to the adjacent face and points inward, transformed
+    /// by `iso`.
     #[inline]
     pub fn clip_plane(&self, iso: Isometry) -> Plane {
         let start = self.start(iso);
 
         // TODO: precompute and store the clip plane normal?
-        let normal = iso.rotation * self.face_normal().cross(self.dir_local());
+        let normal = iso.rotation * self.face_normal_local().cross(self.dir_local());
         let normal = normal.normalize();
 
         Plane::from_point_normal(start.into(), normal.into()).unwrap()

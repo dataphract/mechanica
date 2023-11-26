@@ -1,4 +1,4 @@
-//! Contact
+//! Computation of contact manifolds between convex sets.
 
 use std::{iter, mem, ptr};
 
@@ -299,7 +299,7 @@ pub fn contact_capsule_hull(
             }
         }
 
-        let plane = iso_b * face.plane();
+        let plane = face.plane(iso_b);
 
         let a_depth = -plane.distance_to_point(clip_a);
         let b_depth = -plane.distance_to_point(clip_b);
@@ -342,7 +342,7 @@ pub fn contact_capsule_hull(
 
         // The closest point on the segment is interior to the hull if the dot product of the hull's
         // face normal and the capsule's contact normal is negative.
-        if edge.face_normal().dot(contact_normal) >= 0.0 {
+        if edge.face_normal(iso_b.rotation).dot(contact_normal) >= 0.0 {
             continue;
         }
 
@@ -469,8 +469,8 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
     //
     // - [c · (b ⨯ a)] * [b · (d ⨯ c)] > 0
 
-    let c = iso2 * e2.face_normal();
-    let d = iso2 * e2.reverse().face_normal();
+    let c = -e2.face_normal(iso2.rotation);
+    let d = -e2.reverse().face_normal(iso2.rotation);
     let bxa = e1.dir(iso1.rotation);
 
     let cba = c.dot(bxa);
@@ -480,9 +480,9 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
         return false;
     }
 
-    let a = iso1 * e1.face_normal();
-    let b = iso1 * e1.reverse().face_normal();
-    let dxc = e2.dir(iso2.rotation);
+    let a = e1.face_normal(iso1.rotation);
+    let b = e1.reverse().face_normal(iso1.rotation);
+    let dxc = -e2.dir(iso2.rotation);
 
     let adc = a.dot(dxc);
     let bdc = b.dot(dxc);
@@ -500,6 +500,8 @@ fn clip_vert_loop(
     mut input: impl Iterator<Item = Vec3A>,
     output: &mut Vec<Vec3A>,
 ) {
+    println!("clip plane: {clip_plane:?}");
+
     let first = input.next().unwrap();
     let input = input.chain(iter::once(first));
 
@@ -512,6 +514,8 @@ fn clip_vert_loop(
         if start_inside {
             output.push(start);
 
+            println!("    {start}");
+
             if !end_inside {
                 let clip_v = Line::from_points(start.into(), end.into())
                     .unwrap()
@@ -519,6 +523,8 @@ fn clip_vert_loop(
                     .unwrap();
 
                 output.push(clip_v);
+
+                println!("NEW {clip_v}");
 
                 start_inside = false;
             }
@@ -529,6 +535,8 @@ fn clip_vert_loop(
                 .unwrap();
 
             output.push(clip_v);
+
+            println!("NEW {clip_v}");
 
             start_inside = true;
         }
@@ -574,7 +582,7 @@ pub fn contact_hull_hull(
 
     // Test all face normals of A.
     for face in hull_a.iter_faces() {
-        let plane = iso_a * face.plane();
+        let plane = face.plane(iso_a);
         let on_b = hull_b.support(iso_b, (-plane.normal).into());
 
         let depth = -plane.distance_to_point(on_b);
@@ -592,7 +600,7 @@ pub fn contact_hull_hull(
 
     // Test all face normals of B.
     for face in hull_b.iter_faces() {
-        let plane = iso_b * face.plane();
+        let plane = face.plane(iso_b);
         let on_a = hull_a.support(iso_a, (-plane.normal).into());
 
         let depth = -plane.distance_to_point(on_a);
@@ -612,7 +620,7 @@ pub fn contact_hull_hull(
     // difference. An edge pair builds such a face if and only if the arcs produced by those edges
     // on the hulls' respective Gauss maps intersect.
     for edge_a in hull_a.iter_edges() {
-        let centroid = iso_a * Vec3A::from(edge_a.face().centroid());
+        let centroid = Vec3A::from(edge_a.face().centroid(iso_a));
 
         let start_a = edge_a.start(iso_a);
         let va = edge_a.dir(iso_a.rotation);
@@ -620,10 +628,9 @@ pub fn contact_hull_hull(
         let out = edge_a.end(iso_a) - centroid;
 
         for edge_b in hull_b.iter_edges() {
-            // FIXME: need to negate one set of normals to account for minkowski difference
-            // if !gauss_arcs_intersect(edge_a, iso_a, edge_b, iso_b) {
-            //     continue;
-            // }
+            if !gauss_arcs_intersect(edge_a, iso_a, edge_b, iso_b) {
+                continue;
+            }
 
             let start_b = edge_b.start(iso_b);
             let vb = edge_b.dir(iso_b.rotation);
@@ -641,6 +648,21 @@ pub fn contact_hull_hull(
                 Plane::from_point_normal(start_a.into(), axis.normalize().into()).unwrap();
             let depth = -sep_plane.distance_to_point(start_b);
 
+            if depth >= 0.0 {
+                gizmos.sphere(
+                    (start_a + 0.5 * va).into(),
+                    Quat::IDENTITY,
+                    0.1,
+                    Color::ORANGE,
+                );
+                gizmos.sphere(
+                    (start_b + 0.5 * vb).into(),
+                    Quat::IDENTITY,
+                    0.1,
+                    Color::ORANGE,
+                );
+            }
+
             if depth >= 0.0 && depth < min_depth {
                 best_feature = Some(Feature::Edge { edge_a, edge_b });
                 min_depth = depth;
@@ -656,16 +678,16 @@ pub fn contact_hull_hull(
             inc_hull,
             inc_iso,
         } => {
-            for edge in ref_face.iter_edges() {
-                gizmos.sphere(
-                    edge.start(ref_iso).into(),
-                    Quat::IDENTITY,
-                    0.1,
-                    Color::VIOLET,
-                );
-            }
+            // for edge in ref_face.iter_edges() {
+            //     gizmos.sphere(
+            //         edge.start(ref_iso).into(),
+            //         Quat::IDENTITY,
+            //         0.1,
+            //         Color::VIOLET,
+            //     );
+            // }
 
-            let ref_plane = ref_iso * ref_face.plane();
+            let ref_plane = ref_face.plane(ref_iso);
             let ref_normal = ref_plane.normal;
 
             // Find the most antiparallel face on the incident hull.
@@ -675,14 +697,18 @@ pub fn contact_hull_hull(
             let mut inc_face = None;
             let mut min_dot = f32::INFINITY;
             for face in inc_hull.iter_faces() {
-                let normal = inc_iso * face.plane().normal;
+                let normal = face.plane(inc_iso).normal;
                 let dot = ref_normal.dot(normal);
 
+                println!("dot = {dot}");
                 if dot < min_dot {
                     min_dot = dot;
                     inc_face = Some(face);
                 }
             }
+
+            println!("min_dot = {min_dot}");
+            assert!(min_dot < 0.0);
 
             let inc_face = inc_face.unwrap();
 
@@ -775,12 +801,12 @@ pub fn contact_hull_hull(
             edge_b: on_b,
         } => {
             let seg_a = on_a.segment(iso_a);
-            gizmos.sphere(seg_a.a.into(), Quat::IDENTITY, 0.1, Color::GREEN);
-            gizmos.sphere(seg_a.b.into(), Quat::IDENTITY, 0.1, Color::GREEN);
+            // gizmos.sphere(seg_a.a.into(), Quat::IDENTITY, 0.1, Color::GREEN);
+            // gizmos.sphere(seg_a.b.into(), Quat::IDENTITY, 0.1, Color::GREEN);
 
             let seg_b = on_b.segment(iso_b);
-            gizmos.sphere(seg_b.a.into(), Quat::IDENTITY, 0.1, Color::VIOLET);
-            gizmos.sphere(seg_b.b.into(), Quat::IDENTITY, 0.1, Color::VIOLET);
+            // gizmos.sphere(seg_b.a.into(), Quat::IDENTITY, 0.1, Color::VIOLET);
+            // gizmos.sphere(seg_b.b.into(), Quat::IDENTITY, 0.1, Color::VIOLET);
 
             let points = seg_a.closest_point_to_segment(&seg_b);
             let mid = 0.5 * (points.first.point + points.second.point);
@@ -831,7 +857,7 @@ pub fn contact_hull_sphere(
     let mut min_depth = f32::INFINITY;
     let mut closest_plane = Plane::new(Vec3::X, 0.0).unwrap();
     for face in hull.iter_faces() {
-        let plane = iso_a * face.plane();
+        let plane = face.plane(iso_a);
 
         assert!(plane.normal.is_normalized());
 
