@@ -31,6 +31,11 @@ pub struct Isometry {
 }
 
 impl Isometry {
+    pub const IDENTITY: Self = Isometry {
+        rotation: Quat::IDENTITY,
+        translation: Vec3::ZERO,
+    };
+
     /// Constructs an isometry from an arbitrary `Transform` by dropping the scale component.
     pub fn from_transform(transform: Transform) -> Isometry {
         Isometry {
@@ -42,6 +47,13 @@ impl Isometry {
     pub fn from_translation(v: Vec3) -> Isometry {
         Isometry {
             translation: v,
+            ..Default::default()
+        }
+    }
+
+    pub fn from_rotation(rotation: Quat) -> Isometry {
+        Isometry {
+            rotation,
             ..Default::default()
         }
     }
@@ -109,8 +121,8 @@ impl Mul<Segment> for Isometry {
 
 /// A ray.
 pub struct Ray {
-    origin: Vec3,
-    dir: Vec3,
+    pub origin: Vec3,
+    pub dir: Vec3,
 }
 
 impl Ray {
@@ -166,7 +178,7 @@ impl Ray {
 /// An infinite line.
 pub struct Line {
     // Ray based at the projected origin.
-    ray: Ray,
+    pub ray: Ray,
 }
 
 impl Line {
@@ -206,7 +218,7 @@ impl Line {
             return None;
         }
 
-        let t = (self.ray.origin.dot(plane.normal) + plane.dist) / denom;
+        let t = (plane.dist - plane.normal.dot(self.ray.origin)) / denom;
         Some(self.at(t).into())
     }
 }
@@ -775,5 +787,28 @@ mod tests {
         let line = Line::from_point_dir(Vec3::ZERO, Vec3::X).unwrap();
         let plane = Plane::from_point_normal(Vec3::ZERO, Vec3::X).unwrap();
         assert_eq!(line.intersect_plane(plane), Some(Vec3A::ZERO));
+
+        let line = Line::from_point_dir(Vec3::ZERO, Vec3::ONE.normalize()).unwrap();
+        let plane = Plane::from_point_normal(Vec3::ONE, Vec3::ONE.normalize()).unwrap();
+        assert_ulps_eq!(line.intersect_plane(plane).unwrap(), Vec3A::ONE);
+
+        let line = Line::from_point_dir(Vec3::ZERO, Vec3::ONE.normalize()).unwrap();
+        let plane =
+            Plane::from_point_normal(Vec3::ONE, Vec3::new(-1.0, -1.0, 0.0).normalize()).unwrap();
+        assert_ulps_eq!(line.intersect_plane(plane).unwrap(), Vec3A::ONE);
+
+        let line = Line::from_point_dir(Vec3::ZERO, Vec3::ONE.normalize()).unwrap();
+        let plane = Plane::from_point_normal(Vec3::ONE, Vec3::Y).unwrap();
+        assert_ulps_eq!(line.intersect_plane(plane).unwrap(), Vec3A::ONE);
+
+        let line =
+            Line::from_points([-0.88, 1.5, 0.71].into(), [-1.56, 1.5, -0.03].into()).unwrap();
+        println!("line dir = {}", line.ray.dir);
+        let plane = Plane::from_point_normal(Vec3::ZERO, -Vec3::Z).unwrap();
+        println!("plane = {plane:?}");
+        let pt = line.intersect_plane(plane).unwrap();
+        println!("intersection = {pt}");
+
+        assert_ulps_eq!(plane.distance_to_point(pt), 0.0);
     }
 }

@@ -2,6 +2,7 @@
 
 use std::{iter, mem, ptr};
 
+use approx::{assert_abs_diff_eq, assert_ulps_eq};
 use arrayvec::ArrayVec;
 use bevy::prelude::{Color, Gizmos};
 use glam::{Quat, Vec3, Vec3A};
@@ -471,7 +472,8 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
 
     let c = -e2.face_normal(iso2.rotation);
     let d = -e2.reverse().face_normal(iso2.rotation);
-    let bxa = e1.dir(iso1.rotation);
+
+    let bxa = -e1.dir(iso1.rotation);
 
     let cba = c.dot(bxa);
     let dba = d.dot(bxa);
@@ -482,6 +484,7 @@ fn gauss_arcs_intersect(e1: Edge, iso1: Isometry, e2: Edge, iso2: Isometry) -> b
 
     let a = e1.face_normal(iso1.rotation);
     let b = e1.reverse().face_normal(iso1.rotation);
+
     let dxc = -e2.dir(iso2.rotation);
 
     let adc = a.dot(dxc);
@@ -499,6 +502,7 @@ fn clip_vert_loop(
     clip_plane: Plane,
     mut input: impl Iterator<Item = Vec3A>,
     output: &mut Vec<Vec3A>,
+    gizmos: &mut Gizmos,
 ) {
     println!("clip plane: {clip_plane:?}");
 
@@ -511,10 +515,19 @@ fn clip_vert_loop(
     for end in input {
         let end_inside = clip_plane.distance_to_point(end) >= 0.0;
 
+        if !start_inside {
+            //gizmos.sphere(start.into(), Quat::IDENTITY, 0.1, Color::RED);
+        }
+
+        if !end_inside {
+            //gizmos.sphere(start.into(), Quat::IDENTITY, 0.1, Color::YELLOW);
+        }
+
+        println!("start = {start}");
+        println!("end = {end}");
+
         if start_inside {
             output.push(start);
-
-            println!("    {start}");
 
             if !end_inside {
                 let clip_v = Line::from_points(start.into(), end.into())
@@ -522,9 +535,11 @@ fn clip_vert_loop(
                     .intersect_plane(clip_plane)
                     .unwrap();
 
-                output.push(clip_v);
+                // assert!(clip_plane.distance_to_point(clip_v).abs() < 0.1);
 
-                println!("NEW {clip_v}");
+                gizmos.sphere(clip_v.into(), Quat::IDENTITY, 0.1, Color::GREEN);
+
+                output.push(clip_v);
 
                 start_inside = false;
             }
@@ -534,9 +549,11 @@ fn clip_vert_loop(
                 .intersect_plane(clip_plane)
                 .unwrap();
 
-            output.push(clip_v);
+            // assert!(clip_plane.distance_to_point(clip_v).abs() < 0.1);
 
-            println!("NEW {clip_v}");
+            gizmos.sphere(clip_v.into(), Quat::IDENTITY, 0.1, Color::GREEN);
+
+            output.push(clip_v);
 
             start_inside = true;
         }
@@ -553,6 +570,7 @@ pub fn contact_hull_hull(
     iso_b: Isometry,
     gizmos: &mut Gizmos,
 ) -> Contact {
+    println!("======================================================================");
     if let Some((on_a, on_b)) = gjk::closest(hull_a, iso_a, hull_b, iso_b) {
         return Contact::Disjoint(Disjoint {
             on_a: on_a.into(),
@@ -586,7 +604,7 @@ pub fn contact_hull_hull(
         let on_b = hull_b.support(iso_b, (-plane.normal).into());
 
         let depth = -plane.distance_to_point(on_b);
-        if depth >= 0.0 && depth < min_depth {
+        if depth < min_depth {
             best_feature = Some(Feature::Face {
                 ref_face: face,
                 ref_iso: iso_a,
@@ -604,7 +622,7 @@ pub fn contact_hull_hull(
         let on_a = hull_a.support(iso_a, (-plane.normal).into());
 
         let depth = -plane.distance_to_point(on_a);
-        if depth >= 0.0 && depth < min_depth {
+        if depth < min_depth {
             best_feature = Some(Feature::Face {
                 ref_face: face,
                 ref_iso: iso_b,
@@ -648,28 +666,17 @@ pub fn contact_hull_hull(
                 Plane::from_point_normal(start_a.into(), axis.normalize().into()).unwrap();
             let depth = -sep_plane.distance_to_point(start_b);
 
-            if depth >= 0.0 {
-                gizmos.sphere(
-                    (start_a + 0.5 * va).into(),
-                    Quat::IDENTITY,
-                    0.1,
-                    Color::ORANGE,
-                );
-                gizmos.sphere(
-                    (start_b + 0.5 * vb).into(),
-                    Quat::IDENTITY,
-                    0.1,
-                    Color::ORANGE,
-                );
-            }
-
-            if depth >= 0.0 && depth < min_depth {
+            if depth < min_depth {
                 best_feature = Some(Feature::Edge { edge_a, edge_b });
                 min_depth = depth;
                 contact_normal = axis.into();
             }
         }
     }
+
+    println!("=======================");
+    println!("MIN DEPTH = {min_depth}");
+    println!("=======================");
 
     match best_feature.unwrap() {
         Feature::Face {
@@ -678,14 +685,9 @@ pub fn contact_hull_hull(
             inc_hull,
             inc_iso,
         } => {
-            // for edge in ref_face.iter_edges() {
-            //     gizmos.sphere(
-            //         edge.start(ref_iso).into(),
-            //         Quat::IDENTITY,
-            //         0.1,
-            //         Color::VIOLET,
-            //     );
-            // }
+            for v in ref_face.iter_edges().map(|edge| edge.start(ref_iso)) {
+                gizmos.sphere(v.into(), Quat::IDENTITY, 0.1, Color::BLUE);
+            }
 
             let ref_plane = ref_face.plane(ref_iso);
             let ref_normal = ref_plane.normal;
@@ -718,14 +720,30 @@ pub fn contact_hull_hull(
             for (i, ref_edge) in ref_face.iter_edges().enumerate() {
                 println!("CLIPPING (round {i}) ==============================");
                 let num_in = input.len();
-                clip_vert_loop(ref_edge.clip_plane(ref_iso), input.drain(..), &mut output);
+                let clip_plane = ref_edge.clip_plane(ref_iso);
+
+                gizmos.ray(clip_plane.project_origin(), clip_plane.normal, Color::CYAN);
+
+                clip_vert_loop(clip_plane, input.drain(..), &mut output, gizmos);
                 let num_out = output.len();
                 println!("Clipped {num_in} -> {num_out}");
                 (output, input) = (input, output);
             }
 
-            let clipped = input;
+            // Discard all vertices that aren't in contact with the reference hull.
+            output.extend(
+                input
+                    .iter()
+                    .copied()
+                    .filter(|&v| ref_plane.distance_to_point(v) <= 0.0),
+            );
+
+            let clipped = output;
             println!("clipped.len() = {}", clipped.len());
+
+            for v in clipped.iter().copied() {
+                gizmos.sphere(v.into(), Quat::IDENTITY, 0.1, Color::ORANGE);
+            }
 
             // Find the point on the clipped incident face with the greatest penetration depth.
             let mut deepest = None;
@@ -789,7 +807,8 @@ pub fn contact_hull_hull(
 
             Contact::Penetrating(Penetrating {
                 points: ArrayVec::from_iter(
-                    [a, b, c, d].map(|i| Vec3::from(ref_plane.project_point(clipped[i]))),
+                    // [a, b, c, d].map(|i| Vec3::from(ref_plane.project_point(clipped[i]))),
+                    [a, b, c, d].map(|i| Vec3::from(clipped[i])),
                 ),
                 axis: contact_normal,
                 depth: max_depth,
@@ -801,12 +820,8 @@ pub fn contact_hull_hull(
             edge_b: on_b,
         } => {
             let seg_a = on_a.segment(iso_a);
-            // gizmos.sphere(seg_a.a.into(), Quat::IDENTITY, 0.1, Color::GREEN);
-            // gizmos.sphere(seg_a.b.into(), Quat::IDENTITY, 0.1, Color::GREEN);
 
             let seg_b = on_b.segment(iso_b);
-            // gizmos.sphere(seg_b.a.into(), Quat::IDENTITY, 0.1, Color::VIOLET);
-            // gizmos.sphere(seg_b.b.into(), Quat::IDENTITY, 0.1, Color::VIOLET);
 
             let points = seg_a.closest_point_to_segment(&seg_b);
             let mid = 0.5 * (points.first.point + points.second.point);
@@ -918,5 +933,34 @@ pub fn contact_sphere_sphere(
             axis: axis.into(),
             depth: dist.abs(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f32::consts::FRAC_PI_2;
+
+    use super::*;
+
+    #[test]
+    fn gauss() {
+        let cube = Hull::cuboid(Vec3::ONE);
+
+        let iso1 = Isometry::IDENTITY;
+        let iso2 = Isometry::from_rotation(Quat::from_axis_angle(
+            Vec3::new(1.0, 1.0, 0.0).normalize(),
+            FRAC_PI_2,
+        ));
+
+        let e1 = cube
+            .iter_edges()
+            .find(|edge| edge.dir_local() == -Vec3A::Z && edge.next().dir_local() == -Vec3A::X)
+            .unwrap();
+        let e2 = cube
+            .iter_edges()
+            .find(|edge| edge.dir_local() == Vec3A::Z && edge.next().dir_local() == Vec3A::X)
+            .unwrap();
+
+        assert!(gauss_arcs_intersect(e1, iso1, e2, iso2));
     }
 }

@@ -380,6 +380,9 @@ where
         old_aabb
     }
 
+    /// Removes the AABB associated with the key `T` from the BVH.
+    ///
+    /// If no such AABB exists, returns `None`.
     pub fn remove(&mut self, item: &T) -> Option<Aabb> {
         let node_key = self.keys.remove(item)?;
         let removed_aabb = self.nodes.remove(node_key).unwrap().aabb.aabb;

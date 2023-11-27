@@ -685,6 +685,16 @@ impl<'hull> Edge<'hull> {
         iso * self.start_local()
     }
 
+    #[inline]
+    pub fn midpoint_local(&self) -> Vec3A {
+        0.5 * (self.end_local() + self.start_local())
+    }
+
+    #[inline]
+    pub fn midpoint(&self, iso: Isometry) -> Vec3A {
+        iso * self.midpoint_local()
+    }
+
     /// Returns the position of the edge's end vertex in local space.
     #[inline]
     pub fn end_local(&self) -> Vec3A {
@@ -700,7 +710,7 @@ impl<'hull> Edge<'hull> {
     /// Returns the direction vector of the edge in local space.
     #[inline]
     pub fn dir_local(&self) -> Vec3A {
-        self.end_local() - self.start_local()
+        (self.end_local() - self.start_local()).normalize()
     }
 
     /// Returns the direction vector of the edge, rotated by `rotation`.

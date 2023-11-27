@@ -16,9 +16,9 @@ const SHIFT2_MASK: u64 = 0x1249249249249249;
 const U21_MAX: u32 = (1_u32 << 21) - 1;
 
 #[cfg(feature = "portable_simd")]
-#[inline]
-fn zorder(n: [u32; 3]) -> u64 {
-    use std::simd::{u32x4, u64x4};
+#[inline(never)]
+pub fn zorder(n: [u32; 3]) -> u64 {
+    use std::simd::u64x4;
 
     const SHIFT32_MASK_X4: u64x4 = u64x4::from_array([SHIFT32_MASK; 4]);
     const SHIFT16_MASK_X4: u64x4 = u64x4::from_array([SHIFT16_MASK; 4]);
