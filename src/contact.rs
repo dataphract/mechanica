@@ -502,10 +502,7 @@ fn clip_vert_loop(
     clip_plane: Plane,
     mut input: impl Iterator<Item = Vec3A>,
     output: &mut Vec<Vec3A>,
-    gizmos: &mut Gizmos,
 ) {
-    println!("clip plane: {clip_plane:?}");
-
     let first = input.next().unwrap();
     let input = input.chain(iter::once(first));
 
@@ -514,17 +511,6 @@ fn clip_vert_loop(
 
     for end in input {
         let end_inside = clip_plane.distance_to_point(end) >= 0.0;
-
-        if !start_inside {
-            //gizmos.sphere(start.into(), Quat::IDENTITY, 0.1, Color::RED);
-        }
-
-        if !end_inside {
-            //gizmos.sphere(start.into(), Quat::IDENTITY, 0.1, Color::YELLOW);
-        }
-
-        println!("start = {start}");
-        println!("end = {end}");
 
         if start_inside {
             output.push(start);
@@ -535,10 +521,6 @@ fn clip_vert_loop(
                     .intersect_plane(clip_plane)
                     .unwrap();
 
-                // assert!(clip_plane.distance_to_point(clip_v).abs() < 0.1);
-
-                gizmos.sphere(clip_v.into(), Quat::IDENTITY, 0.1, Color::GREEN);
-
                 output.push(clip_v);
 
                 start_inside = false;
@@ -548,10 +530,6 @@ fn clip_vert_loop(
                 .unwrap()
                 .intersect_plane(clip_plane)
                 .unwrap();
-
-            // assert!(clip_plane.distance_to_point(clip_v).abs() < 0.1);
-
-            gizmos.sphere(clip_v.into(), Quat::IDENTITY, 0.1, Color::GREEN);
 
             output.push(clip_v);
 
@@ -570,7 +548,6 @@ pub fn contact_hull_hull(
     iso_b: Isometry,
     gizmos: &mut Gizmos,
 ) -> Contact {
-    println!("======================================================================");
     if let Some((on_a, on_b)) = gjk::closest(hull_a, iso_a, hull_b, iso_b) {
         return Contact::Disjoint(Disjoint {
             on_a: on_a.into(),
@@ -592,8 +569,9 @@ pub fn contact_hull_hull(
         },
     }
 
-    // If GJK fails, locate a separating axis by testing all face normals of both polygons and the
-    // cross products of all edge pairs.
+    // If GJK fails, try to locate a separating axis by testing all face normals of both polygons
+    // and the cross products of all edge pairs. If the hulls are penetrating along all such axes,
+    // select the axis of minimum penetration and return a contact.
     let mut best_feature = None;
     let mut min_depth = f32::INFINITY;
     let mut contact_normal = Vec3::ZERO;
@@ -603,7 +581,16 @@ pub fn contact_hull_hull(
         let plane = face.plane(iso_a);
         let on_b = hull_b.support(iso_b, (-plane.normal).into());
 
-        let depth = -plane.distance_to_point(on_b);
+        let dist = plane.distance_to_point(on_b);
+        if dist > 0.0 {
+            return Contact::Disjoint(Disjoint {
+                on_a: (on_b - dist * Vec3A::from(plane.normal)).into(),
+                on_b: on_b.into(),
+                dist,
+            });
+        }
+
+        let depth = -dist;
         if depth < min_depth {
             best_feature = Some(Feature::Face {
                 ref_face: face,
@@ -621,7 +608,16 @@ pub fn contact_hull_hull(
         let plane = face.plane(iso_b);
         let on_a = hull_a.support(iso_a, (-plane.normal).into());
 
-        let depth = -plane.distance_to_point(on_a);
+        let dist = plane.distance_to_point(on_a);
+        if dist > 0.0 {
+            return Contact::Disjoint(Disjoint {
+                on_a: on_a.into(),
+                on_b: (on_a - dist * Vec3A::from(plane.normal)).into(),
+                dist: -dist,
+            });
+        }
+
+        let depth = -dist;
         if depth < min_depth {
             best_feature = Some(Feature::Face {
                 ref_face: face,
@@ -634,7 +630,7 @@ pub fn contact_hull_hull(
         }
     }
 
-    // A pair of edges can only produce a separating axis if it builds a face on the Minkowski
+    // A pair of edges can only produce a separating axis if the edges build a face on the Minkowski
     // difference. An edge pair builds such a face if and only if the arcs produced by those edges
     // on the hulls' respective Gauss maps intersect.
     for edge_a in hull_a.iter_edges() {
@@ -664,7 +660,21 @@ pub fn contact_hull_hull(
             let axis = if cross.dot(out) > 0.0 { cross } else { -cross };
             let sep_plane =
                 Plane::from_point_normal(start_a.into(), axis.normalize().into()).unwrap();
-            let depth = -sep_plane.distance_to_point(start_b);
+            let dist = sep_plane.distance_to_point(start_b);
+
+            if dist > 0.0 {
+                let seg_a = edge_a.segment(iso_a);
+                let seg_b = edge_b.segment(iso_b);
+
+                let points = seg_a.closest_point_to_segment(&seg_b);
+                return Contact::Disjoint(Disjoint {
+                    on_a: points.first.point.into(),
+                    on_b: points.second.point.into(),
+                    dist,
+                });
+            }
+
+            let depth = -dist;
 
             if depth < min_depth {
                 best_feature = Some(Feature::Edge { edge_a, edge_b });
@@ -674,10 +684,6 @@ pub fn contact_hull_hull(
         }
     }
 
-    println!("=======================");
-    println!("MIN DEPTH = {min_depth}");
-    println!("=======================");
-
     match best_feature.unwrap() {
         Feature::Face {
             ref_face,
@@ -685,10 +691,6 @@ pub fn contact_hull_hull(
             inc_hull,
             inc_iso,
         } => {
-            for v in ref_face.iter_edges().map(|edge| edge.start(ref_iso)) {
-                gizmos.sphere(v.into(), Quat::IDENTITY, 0.1, Color::BLUE);
-            }
-
             let ref_plane = ref_face.plane(ref_iso);
             let ref_normal = ref_plane.normal;
 
@@ -702,14 +704,12 @@ pub fn contact_hull_hull(
                 let normal = face.plane(inc_iso).normal;
                 let dot = ref_normal.dot(normal);
 
-                println!("dot = {dot}");
                 if dot < min_dot {
                     min_dot = dot;
                     inc_face = Some(face);
                 }
             }
 
-            println!("min_dot = {min_dot}");
             assert!(min_dot < 0.0);
 
             let inc_face = inc_face.unwrap();
@@ -717,16 +717,10 @@ pub fn contact_hull_hull(
             // Clip the incident face using the reference face.
             let mut input = Vec::from_iter(inc_face.iter_edges().map(|edge| edge.start(inc_iso)));
             let mut output = Vec::with_capacity(2 * input.len());
-            for (i, ref_edge) in ref_face.iter_edges().enumerate() {
-                println!("CLIPPING (round {i}) ==============================");
-                let num_in = input.len();
+            for ref_edge in ref_face.iter_edges() {
                 let clip_plane = ref_edge.clip_plane(ref_iso);
 
-                gizmos.ray(clip_plane.project_origin(), clip_plane.normal, Color::CYAN);
-
-                clip_vert_loop(clip_plane, input.drain(..), &mut output, gizmos);
-                let num_out = output.len();
-                println!("Clipped {num_in} -> {num_out}");
+                clip_vert_loop(clip_plane, input.drain(..), &mut output);
                 (output, input) = (input, output);
             }
 
@@ -739,18 +733,12 @@ pub fn contact_hull_hull(
             );
 
             let clipped = output;
-            println!("clipped.len() = {}", clipped.len());
-
-            for v in clipped.iter().copied() {
-                gizmos.sphere(v.into(), Quat::IDENTITY, 0.1, Color::ORANGE);
-            }
 
             // Find the point on the clipped incident face with the greatest penetration depth.
             let mut deepest = None;
             let mut max_depth = f32::NEG_INFINITY;
             for (i, &v) in clipped.iter().enumerate() {
                 let depth = -ref_plane.distance_to_point(v);
-                println!("depth = {depth}");
                 if depth > max_depth {
                     max_depth = depth;
                     deepest = Some(i);
@@ -807,10 +795,16 @@ pub fn contact_hull_hull(
 
             Contact::Penetrating(Penetrating {
                 points: ArrayVec::from_iter(
-                    // [a, b, c, d].map(|i| Vec3::from(ref_plane.project_point(clipped[i]))),
-                    [a, b, c, d].map(|i| Vec3::from(clipped[i])),
+                    [a, b, c, d].map(|i| Vec3::from(ref_plane.project_point(clipped[i]))),
                 ),
-                axis: contact_normal,
+
+                // TODO: do this via pointer comparison (i.e. is inc_hull == hull_b)?
+                axis: if ref_plane.normal.dot(contact_normal) > 0.0 {
+                    contact_normal
+                } else {
+                    -contact_normal
+                },
+
                 depth: max_depth,
             })
         }
