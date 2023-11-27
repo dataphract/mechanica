@@ -15,7 +15,7 @@ use slotmap::{new_key_type, SlotMap};
 use crate::{aabb::Aabb, Ray};
 
 new_key_type! {
-    struct NodeKey;
+    struct BvhKey;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -36,8 +36,8 @@ impl Not for Dir {
     }
 }
 
-impl Index<Dir> for [NodeKey; 2] {
-    type Output = NodeKey;
+impl Index<Dir> for [BvhKey; 2] {
+    type Output = BvhKey;
 
     #[inline]
     fn index(&self, index: Dir) -> &Self::Output {
@@ -45,7 +45,7 @@ impl Index<Dir> for [NodeKey; 2] {
     }
 }
 
-impl IndexMut<Dir> for [NodeKey; 2] {
+impl IndexMut<Dir> for [BvhKey; 2] {
     fn index_mut(&mut self, index: Dir) -> &mut Self::Output {
         &mut self[index as usize]
     }
@@ -54,9 +54,9 @@ impl IndexMut<Dir> for [NodeKey; 2] {
 /// A dynamic bounding-volume hierarchy implemented as an AABB tree.
 #[derive(Default)]
 pub struct Bvh<T> {
-    root: Option<NodeKey>,
-    keys: HashMap<T, NodeKey>,
-    nodes: SlotMap<NodeKey, Node<T>>,
+    root: Option<BvhKey>,
+    keys: HashMap<T, BvhKey>,
+    nodes: SlotMap<BvhKey, Node<T>>,
 }
 
 struct Swap {
@@ -127,7 +127,7 @@ where
         self.nodes.clear();
     }
 
-    fn aabb(&self, node: NodeKey) -> &CachedAabb {
+    fn aabb(&self, node: BvhKey) -> &CachedAabb {
         &self.nodes[node].aabb
     }
 
@@ -136,7 +136,7 @@ where
     /// The lower bound is the cost that would be incurred if `sibling` were to be entirely
     /// contained by `new_aabb`. This is equivalent to the surface area of `new_aabb` plus the
     /// increase in surface area caused by refitting all ancestors of `sibling` to fit `new_aabb`.
-    fn compute_sibling_cost_lower_bound(&self, sibling: NodeKey, new_aabb: &CachedAabb) -> f32 {
+    fn compute_sibling_cost_lower_bound(&self, sibling: BvhKey, new_aabb: &CachedAabb) -> f32 {
         // TODO: lower bound inherited cost can be memoized for all ancestor nodes.
 
         let mut cost = new_aabb.surface_area;
@@ -154,7 +154,7 @@ where
     }
 
     /// Computes the cost of choosing `sibling` as a sibling node for `new_aabb`.
-    fn compute_sibling_cost(&self, sibling: NodeKey, new_aabb: &CachedAabb) -> f32 {
+    fn compute_sibling_cost(&self, sibling: BvhKey, new_aabb: &CachedAabb) -> f32 {
         // The direct cost is the surface area of the potential parent AABB.
         let sibling_aabb = &self.nodes[sibling].aabb;
         let union = sibling_aabb.union(new_aabb);
@@ -175,7 +175,7 @@ where
         direct_cost + inherited_cost
     }
 
-    fn refit_node(&mut self, node: NodeKey) {
+    fn refit_node(&mut self, node: BvhKey) {
         let children = match &mut self.nodes[node].kind {
             NodeKind::Branch(b) => b.children,
 
@@ -189,7 +189,7 @@ where
     }
 
     /// Computes a rotation of the subtree rooted at `node`.
-    fn compute_rotation(&self, node: NodeKey, child_dir: Dir, grandchild_dir: Dir) -> Option<Swap> {
+    fn compute_rotation(&self, node: BvhKey, child_dir: Dir, grandchild_dir: Dir) -> Option<Swap> {
         let children = self.branch(node).children;
 
         let swap_child = children[child_dir];
@@ -225,7 +225,7 @@ where
     /// Applies the best possible rotation for the subtree rooted at `node`.
     ///
     /// If all possible rotations would increase the tree's cost, no rotation is applied.
-    fn apply_best_rotation(&mut self, node: NodeKey) {
+    fn apply_best_rotation(&mut self, node: BvhKey) {
         let mut best_cost = 0.0;
         let mut best_swap: Option<Swap> = None;
 
@@ -256,7 +256,7 @@ where
     }
 
     /// Ascends the tree from `node` to the root, refitting and applying rotations.
-    fn refit_and_rotate(&mut self, node: NodeKey) {
+    fn refit_and_rotate(&mut self, node: BvhKey) {
         self.refit_node(node);
         self.apply_best_rotation(node);
 
@@ -455,7 +455,7 @@ where
         }
     }
 
-    fn which_child(&self, parent: NodeKey, child: NodeKey) -> Dir {
+    fn which_child(&self, parent: BvhKey, child: BvhKey) -> Dir {
         let NodeKind::Branch(b) = &self.nodes[parent].kind else {
             panic!("{parent:?} is not a branch");
         };
@@ -469,19 +469,19 @@ where
         }
     }
 
-    fn parent_and_dir(&self, child: NodeKey) -> Option<(NodeKey, Dir)> {
+    fn parent_and_dir(&self, child: BvhKey) -> Option<(BvhKey, Dir)> {
         let parent = self.nodes[child].parent?;
         Some((parent, self.which_child(parent, child)))
     }
 
-    fn branch(&self, key: NodeKey) -> &Branch {
+    fn branch(&self, key: BvhKey) -> &Branch {
         match &self.nodes[key].kind {
             NodeKind::Branch(b) => b,
             NodeKind::Leaf(_) => panic!("not a branch"),
         }
     }
 
-    fn branch_mut(&mut self, key: NodeKey) -> &mut Branch {
+    fn branch_mut(&mut self, key: BvhKey) -> &mut Branch {
         match &mut self.nodes[key].kind {
             NodeKind::Branch(b) => b,
             NodeKind::Leaf(_) => panic!("not a branch"),
@@ -523,7 +523,7 @@ struct Node<T> {
     aabb: CachedAabb,
 
     /// The parent node, if any.
-    parent: Option<NodeKey>,
+    parent: Option<BvhKey>,
 
     /// Branch or leaf data, depending on the node kind.
     kind: NodeKind<T>,
@@ -561,7 +561,7 @@ enum NodeKind<T> {
 }
 
 struct Branch {
-    children: [NodeKey; 2],
+    children: [BvhKey; 2],
 }
 
 struct Leaf<T> {
@@ -570,7 +570,7 @@ struct Leaf<T> {
 
 struct NodeCost {
     lower_bound: f32,
-    key: NodeKey,
+    key: BvhKey,
 }
 
 impl PartialEq for NodeCost {
@@ -669,7 +669,7 @@ impl AabbQuery for RayAabbQuery {
 
 pub struct BvhQuery<'tree, T, Q> {
     tree: &'tree Bvh<T>,
-    node: Option<NodeKey>,
+    node: Option<BvhKey>,
     query: Q,
     came_from: CameFrom,
 }
