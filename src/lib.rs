@@ -18,6 +18,8 @@ pub mod gjk;
 mod glam_ext;
 pub mod hull;
 pub mod nmesh;
+pub mod rigid;
+pub mod testbench;
 pub mod zorder;
 
 #[doc(inline)]
@@ -500,6 +502,11 @@ pub struct Sphere {
 }
 
 impl Sphere {
+    #[inline]
+    pub fn compute_aabb(&self) -> Aabb {
+        Aabb::new(self.center, Vec3::splat(self.radius))
+    }
+
     /// Returns `true` if `point` is within the sphere.
     #[inline]
     pub fn contains_point(&self, point: Vec3) -> bool {
@@ -531,6 +538,13 @@ pub struct Capsule {
 }
 
 impl Capsule {
+    pub fn compute_aabb(&self) -> Aabb {
+        let origin = 0.5 * (self.segment.b + self.segment.a);
+        let half_extents = 0.5 * (self.segment.b - self.segment.a);
+
+        Aabb::new(origin.into(), half_extents.into())
+    }
+
     pub fn intersects_sphere(&self, sphere: &Sphere) -> bool {
         let center = sphere.center.into();
         let closest = self.segment.closest_point_to_point(center);

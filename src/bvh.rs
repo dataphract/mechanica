@@ -4,18 +4,18 @@
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, VecDeque},
-    hash::Hash,
     ops::{Index, IndexMut, Not},
 };
 
+use bevy::prelude::{Color, Gizmos, Transform};
 use glam::{Vec3, Vec3A};
-use hashbrown::HashMap;
 use slotmap::{new_key_type, SlotMap};
 
 use crate::{aabb::Aabb, Ray};
 
 new_key_type! {
-    struct BvhKey;
+    /// A key associated with an element of a [`Bvh`].
+    pub struct BvhKey;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -55,7 +55,6 @@ impl IndexMut<Dir> for [BvhKey; 2] {
 #[derive(Default)]
 pub struct Bvh<T> {
     root: Option<BvhKey>,
-    keys: HashMap<T, BvhKey>,
     nodes: SlotMap<BvhKey, Node<T>>,
 }
 
@@ -67,15 +66,11 @@ struct Swap {
     new_child_aabb: CachedAabb,
 }
 
-impl<T> Bvh<T>
-where
-    T: Copy + Hash + Eq,
-{
+impl<T> Bvh<T> {
     /// Constructs an empty BVH.
     pub fn new() -> Bvh<T> {
         Bvh {
             root: None,
-            keys: HashMap::default(),
             nodes: SlotMap::with_key(),
         }
     }
@@ -84,7 +79,6 @@ where
     pub fn with_capacity(cap: usize) -> Bvh<T> {
         Bvh {
             root: None,
-            keys: HashMap::with_capacity(cap),
             nodes: SlotMap::with_capacity_and_key(2 * cap - 1),
         }
     }
@@ -94,37 +88,45 @@ where
     pub fn is_empty(&self) -> bool {
         #[cfg(debug)]
         {
-            assert_eq!(self.keys.is_empty(), self.nodes.is_empty());
-            assert_eq!(self.keys.is_empty(), self.root.is_none());
+            assert_eq!(self.nodes.is_empty(), self.root.is_none());
         }
 
-        self.keys.is_empty()
+        self.nodes.is_empty()
     }
 
     /// Returns the number of items in the BVH.
     #[inline]
     pub fn len(&self) -> usize {
-        #[cfg(debug)]
-        {
-            assert_eq!(self.keys.len(), self.nodes.len());
-        }
-
-        self.keys.len()
+        self.nodes.len()
     }
 
     /// Returns the AABB associated with `key`.
     #[inline]
-    pub fn get(&self, key: T) -> Option<&Aabb> {
-        let &node = self.keys.get(&key)?;
-        Some(&self.nodes[node].aabb.aabb)
+    pub fn get(&self, key: BvhKey) -> Option<&Aabb> {
+        self.nodes.get(key).map(|node| &node.aabb.aabb)
     }
 
     /// Removes all items from the BVH.
     #[inline]
     pub fn clear(&mut self) {
         self.root = None;
-        self.keys.clear();
         self.nodes.clear();
+    }
+
+    #[inline]
+    pub fn draw(&self, gizmos: &mut Gizmos) {
+        for (_, node) in self.nodes.iter() {
+            let color = match node.kind {
+                NodeKind::Branch(_) => Color::BLUE,
+                NodeKind::Leaf(_) => Color::GREEN,
+            };
+
+            gizmos.cuboid(
+                Transform::from_translation(node.aabb.aabb.origin())
+                    .with_scale(2.0 * node.aabb.aabb.half_extents()),
+                color,
+            );
+        }
     }
 
     fn aabb(&self, node: BvhKey) -> &CachedAabb {
@@ -270,13 +272,9 @@ where
         }
     }
 
-    /// Inserts `item` into the BVH, associated with the axis-aligned bounding box `aabb`.
-    ///
-    /// If `item` was already an element of the BVH, the previous AABB is removed and returned.
-    pub fn insert(&mut self, item: T, aabb: Aabb) -> Option<Aabb> {
+    /// Inserts `aabb` into the BVH, associated with `item`, and returns the assigned key.
+    pub fn insert(&mut self, aabb: Aabb, item: T) -> BvhKey {
         let aabb = CachedAabb::new(aabb);
-
-        let old_aabb = self.remove(&item);
 
         let node_key = self.nodes.insert(Node {
             aabb: aabb.clone(),
@@ -284,12 +282,10 @@ where
             kind: NodeKind::Leaf(Leaf { item }),
         });
 
-        self.keys.insert(item, node_key);
-
         // If the tree is empty, set `item` as root and return.
         let Some(root) = self.root else {
             self.root = Some(node_key);
-            return old_aabb;
+            return node_key;
         };
 
         let root_sibling_aabb = self.nodes[root].aabb.union(&aabb);
@@ -298,7 +294,7 @@ where
         // Priority queue of nodes, ordered by lower bound on insertion cost.
         //
         // TODO: cache this in the struct to avoid reallocating on every insertion.
-        let mut queue = BinaryHeap::with_capacity(self.keys.len());
+        let mut queue = BinaryHeap::with_capacity(self.nodes.len());
 
         if let NodeKind::Branch(b) = &self.nodes[root].kind {
             for &child in b.children.iter() {
@@ -362,8 +358,9 @@ where
 
             self.root = Some(new_parent);
             self.nodes[node_key].parent = Some(new_parent);
+            self.nodes[sibling].parent = Some(new_parent);
 
-            return old_aabb;
+            return node_key;
         };
 
         // Link the new parent node into the tree.
@@ -377,21 +374,21 @@ where
 
         self.refit_and_rotate(new_parent);
 
-        old_aabb
+        node_key
     }
 
     /// Removes the AABB associated with the key `T` from the BVH.
     ///
     /// If no such AABB exists, returns `None`.
-    pub fn remove(&mut self, item: &T) -> Option<Aabb> {
-        let node_key = self.keys.remove(item)?;
-        let removed_aabb = self.nodes.remove(node_key).unwrap().aabb.aabb;
+    pub fn remove(&mut self, key: BvhKey) -> Option<Aabb> {
+        let opt_parent = self.nodes[key].parent;
+
+        let removed_aabb = self.nodes.remove(key).unwrap().aabb.aabb;
 
         // Get the removed node's parent.
-        let Some(parent) = self.nodes[node_key].parent else {
+        let Some(parent) = opt_parent else {
             // If the removed node was the root, the tree becomes empty.
-            debug_assert_eq!(self.root, Some(node_key));
-            debug_assert!(self.keys.is_empty());
+            debug_assert_eq!(self.root, Some(key));
             debug_assert!(self.nodes.is_empty());
             self.root = None;
             return Some(removed_aabb);
@@ -399,10 +396,10 @@ where
 
         // Get the sibling of the removed node.
         let parent_branch = self.branch_mut(parent);
-        let sibling = if parent_branch.children[0] == node_key {
+        let sibling = if parent_branch.children[0] == key {
             parent_branch.children[1]
         } else {
-            debug_assert_eq!(parent_branch.children[1], node_key);
+            debug_assert_eq!(parent_branch.children[1], key);
             parent_branch.children[0]
         };
 
@@ -455,6 +452,15 @@ where
         }
     }
 
+    pub fn aabb_query(&self, aabb: Aabb) -> BvhQuery<'_, T, AabbAabbQuery> {
+        BvhQuery {
+            tree: self,
+            node: self.root,
+            query: AabbAabbQuery { aabb },
+            came_from: CameFrom::Parent,
+        }
+    }
+
     fn which_child(&self, parent: BvhKey, child: BvhKey) -> Dir {
         let NodeKind::Branch(b) = &self.nodes[parent].kind else {
             panic!("{parent:?} is not a branch");
@@ -488,9 +494,9 @@ where
         }
     }
 
-    fn assert_invariants(&self) {
+    #[track_caller]
+    pub fn assert_invariants(&self) {
         let Some(node) = self.root else {
-            assert!(self.keys.is_empty());
             assert!(self.nodes.is_empty());
             return;
         };
@@ -499,6 +505,7 @@ where
         queue.push_back(node);
 
         while let Some(node) = queue.pop_front() {
+            assert!(self.nodes.contains_key(node));
             match &self.nodes[node].kind {
                 NodeKind::Branch(b) => {
                     let [left, right] = b.children;
@@ -506,13 +513,21 @@ where
                     queue.push_back(left);
                     queue.push_back(right);
 
-                    assert!(self.aabb(node).aabb.contains_aabb(&self.aabb(left).aabb));
-                    assert!(self.aabb(node).aabb.contains_aabb(&self.aabb(right).aabb));
+                    assert!(
+                        self.aabb(node).aabb.contains_aabb(&self.aabb(left).aabb),
+                        "{:?} vs. {:?}",
+                        self.aabb(node).aabb,
+                        self.aabb(left).aabb
+                    );
+                    assert!(
+                        self.aabb(node).aabb.contains_aabb(&self.aabb(right).aabb),
+                        "{:?} vs. {:?}",
+                        self.aabb(node).aabb,
+                        self.aabb(right).aabb
+                    );
                 }
 
-                NodeKind::Leaf(l) => {
-                    assert!(self.keys.contains_key(&l.item));
-                }
+                NodeKind::Leaf(_) => (),
             }
         }
     }
@@ -667,6 +682,24 @@ impl AabbQuery for RayAabbQuery {
     }
 }
 
+pub struct AabbAabbQuery {
+    aabb: Aabb,
+}
+
+impl AabbAabbQuery {
+    #[inline]
+    pub fn new(aabb: Aabb) -> AabbAabbQuery {
+        AabbAabbQuery { aabb }
+    }
+}
+
+impl AabbQuery for AabbAabbQuery {
+    #[inline]
+    fn aabb_query(&self, aabb: &Aabb) -> bool {
+        self.aabb.intersects_aabb(aabb)
+    }
+}
+
 pub struct BvhQuery<'tree, T, Q> {
     tree: &'tree Bvh<T>,
     node: Option<BvhKey>,
@@ -676,7 +709,6 @@ pub struct BvhQuery<'tree, T, Q> {
 
 impl<'tree, T, Q> BvhQuery<'tree, T, Q>
 where
-    T: Copy + Hash + Eq,
     Q: AabbQuery,
 {
     fn ascend(&mut self) {
@@ -703,17 +735,14 @@ where
     }
 }
 
-macro_rules! aabb_tree_query {
+macro_rules! bvh_query {
     ($outer:ident : $inner:ident) => {
         pub struct $outer<'tree, T> {
             inner: BvhQuery<'tree, T, $inner>,
         }
 
-        impl<'tree, T> Iterator for $outer<'tree, T>
-        where
-            T: Copy + Eq + Hash,
-        {
-            type Item = T;
+        impl<'tree, T> Iterator for $outer<'tree, T> {
+            type Item = &'tree T;
 
             #[inline]
             fn next(&mut self) -> Option<Self::Item> {
@@ -723,15 +752,15 @@ macro_rules! aabb_tree_query {
     };
 }
 
-aabb_tree_query!(PointBvhQuery: PointAabbQuery);
-aabb_tree_query!(RayBvhQuery: RayAabbQuery);
+bvh_query!(PointBvhQuery: PointAabbQuery);
+bvh_query!(RayBvhQuery: RayAabbQuery);
+bvh_query!(AabbBvhQuery: AabbAabbQuery);
 
 impl<'tree, T, Q> Iterator for BvhQuery<'tree, T, Q>
 where
-    T: Copy + Hash + Eq,
     Q: AabbQuery,
 {
-    type Item = T;
+    type Item = &'tree T;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.node {
@@ -758,7 +787,7 @@ where
                 NodeKind::Branch(_) => self.descend(Dir::Left),
                 NodeKind::Leaf(l) => {
                     self.came_from = CameFrom::Right;
-                    return Some(l.item);
+                    return Some(&l.item);
                 }
             }
         }
@@ -784,11 +813,11 @@ mod tests {
         tree.assert_invariants();
         assert!(tree.is_empty());
 
-        tree.insert("a", Aabb::new(Vec3::new(2.0, 0.0, 0.0), Vec3::ONE));
+        tree.insert(Aabb::new(Vec3::new(2.0, 0.0, 0.0), Vec3::ONE), "a");
         tree.assert_invariants();
         assert_eq!(tree.len(), 1);
 
-        tree.insert("b", Aabb::new(Vec3::new(-2.0, 0.0, 0.0), Vec3::ONE));
+        tree.insert(Aabb::new(Vec3::new(-2.0, 0.0, 0.0), Vec3::ONE), "b");
         tree.assert_invariants();
         assert_eq!(tree.len(), 2);
     }
@@ -797,8 +826,8 @@ mod tests {
     fn single_box() {
         let mut tree = Bvh::new();
 
-        tree.insert("a", Aabb::new(Vec3::ZERO, Vec3::ONE));
-        assert_eq!(tree.point_query(Vec3::ZERO).collect::<Vec<_>>(), vec!["a"]);
+        tree.insert(Aabb::new(Vec3::ZERO, Vec3::ONE), "a");
+        assert_eq!(tree.point_query(Vec3::ZERO).collect::<Vec<_>>(), vec![&"a"]);
         assert_eq!(tree.point_query(2.0 * Vec3::ONE).count(), 0);
     }
 
@@ -807,32 +836,32 @@ mod tests {
         let mut tree = Bvh::new();
 
         // Disjoint boxes
-        tree.insert("a", unit_box(-Vec3::X));
-        tree.insert("b", unit_box(Vec3::X));
+        tree.insert(unit_box(-Vec3::X), "a");
+        tree.insert(unit_box(Vec3::X), "b");
         tree.assert_invariants();
 
-        assert_eq!(tree.point_query(-Vec3::X).collect::<Vec<_>>(), vec!["a"]);
-        assert_eq!(tree.point_query(Vec3::X).collect::<Vec<_>>(), vec!["b"]);
+        assert_eq!(tree.point_query(-Vec3::X).collect::<Vec<_>>(), vec![&"a"]);
+        assert_eq!(tree.point_query(Vec3::X).collect::<Vec<_>>(), vec![&"b"]);
         assert_eq!(tree.point_query(Vec3::ZERO).count(), 0);
 
         tree.clear();
 
         // Intersecting boxes
-        tree.insert("c", unit_box(-0.25 * Vec3::X));
-        tree.insert("d", unit_box(0.25 * Vec3::X));
+        tree.insert(unit_box(-0.25 * Vec3::X), "c");
+        tree.insert(unit_box(0.25 * Vec3::X), "d");
         tree.assert_invariants();
 
         assert_eq!(
             tree.point_query(-0.5 * Vec3::X).collect::<Vec<_>>(),
-            vec!["c"]
+            vec![&"c"]
         );
         assert_eq!(
             tree.point_query(0.5 * Vec3::X).collect::<Vec<_>>(),
-            vec!["d"]
+            vec![&"d"]
         );
         assert_eq!(
             tree.point_query(Vec3::ZERO).collect::<HashSet<_>>(),
-            HashSet::from_iter(["c", "d"])
+            HashSet::from_iter([&"c", &"d"])
         );
     }
 
@@ -850,7 +879,7 @@ mod tests {
         for x in 0..5 {
             let y = 2.0 * x as f32;
 
-            tree.insert(x, unit_box(y * Vec3::X));
+            tree.insert(unit_box(y * Vec3::X), x);
         }
     }
 }

@@ -11,7 +11,7 @@ use bevy::{
 use glam::{Vec3, Vec3A};
 use hashbrown::HashSet;
 
-use crate::{Isometry, Plane, Segment};
+use crate::{Aabb, Isometry, Plane, Segment};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VertIdx(u32);
@@ -66,6 +66,8 @@ pub(crate) struct EdgeData {
 pub struct Hull {
     pub(crate) vertices: Vec<Vec3>,
 
+    aabb: Aabb,
+
     // TODO: all adjacency information can be stored in a single Vec<u32>.
 
     // Mapping from vertex index to slice of the `vert_edges` array.
@@ -82,6 +84,10 @@ pub struct Hull {
 }
 
 impl Hull {
+    pub fn aabb(&self) -> Aabb {
+        self.aabb
+    }
+
     // Iterates over the edges that contain this vertex.
     fn iter_vertex_edges(&self, vertex_id: VertIdx) -> impl Iterator<Item = EdgeData> + '_ {
         let ListSlice { first, len } = self.vert_edge_slices[vertex_id.0 as usize];
@@ -223,6 +229,8 @@ impl Hull {
             scale * Vec3::new(0.0, 1.0, 0.0),
         ];
 
+        let aabb = Aabb::of_vertices(vertices.iter().copied());
+
         let vert_edge_slices = vec![
             ListSlice { first: 0, len: 3 },
             ListSlice { first: 3, len: 3 },
@@ -271,6 +279,7 @@ impl Hull {
 
         Hull {
             vertices,
+            aabb,
             vert_edge_slices,
             vert_edges,
             edges,
@@ -356,6 +365,7 @@ impl Hull {
 
         Hull {
             vertices,
+            aabb: Aabb::new(Vec3::ZERO, half_extents),
             vert_edge_slices,
             vert_edges,
             edges,

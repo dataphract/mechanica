@@ -1,42 +1,64 @@
 use bevy::{
+    app::PluginGroupBuilder,
     ecs::system::SystemParam,
-    input::mouse::{MouseMotion, MouseWheel},
+    input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel},
     prelude::*,
     window::{CursorGrabMode, PrimaryWindow},
 };
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::EguiPlugin;
 use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
-use bevy_mod_picking::prelude::*;
-use bevy_transform_gizmo::GizmoPickSource;
-use mechanica::nmesh::{
-    bevy_::{create_nmesh, NMeshPlugins},
-    NMesh,
-};
+use bevy_mod_picking::prelude::{GlobalHighlight, RaycastPickCamera};
+use bevy_transform_gizmo::{GizmoPickSource, TransformGizmoPlugin};
 
-fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins)
-        .add_plugins(InfiniteGridPlugin)
-        .add_plugins(NMeshPlugins)
-        .add_systems(Startup, setup)
-        .add_systems(Update, control_camera)
-        .run();
+pub struct TestbenchPlugins;
+
+impl PluginGroup for TestbenchPlugins {
+    fn build(self) -> PluginGroupBuilder {
+        PluginGroupBuilder::start::<Self>()
+            .add(InfiniteGridPlugin)
+            .add(EguiPlugin)
+            .add(bevy_mod_picking::picking_core::CorePlugin)
+            .add(bevy_mod_picking::picking_core::InteractionPlugin)
+            .add(bevy_mod_picking::input::InputPlugin)
+            .add(bevy_mod_picking::highlight::DefaultHighlightingPlugin)
+            .add(bevy_mod_picking::selection::SelectionPlugin)
+            .add(bevy_mod_picking::backends::raycast::RaycastBackend)
+            .add(bevy_mod_picking::backends::bevy_ui::BevyUiBackend)
+            .add(TransformGizmoPlugin::default())
+            .add(TestbenchPlugin)
+    }
+
+    fn name() -> String {
+        "TestbenchPlugins".into()
+    }
+}
+
+pub struct TestbenchPlugin;
+
+impl Plugin for TestbenchPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, setup)
+            .add_systems(PostStartup, post_startup)
+            .add_systems(Update, control_camera);
+    }
 }
 
 #[derive(Component)]
-struct SolidShadingLight;
+pub struct SolidShadingLight;
 
-fn setup(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut nmeshes: ResMut<Assets<NMesh>>,
-) {
+#[derive(Component)]
+pub struct EditorCamera {
+    pub focus: Vec3,
+    pub distance: f32,
+}
+
+fn setup(mut commands: Commands) {
     commands.spawn(InfiniteGridBundle::default());
+
     commands
         .spawn(Camera3dBundle {
             projection: Projection::Perspective(default()),
-            transform: Transform::from_xyz(5.0, 1.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0.0, 2.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         })
         .insert(EditorCamera {
@@ -56,22 +78,25 @@ fn setup(
             ..default()
         })
         .insert(SolidShadingLight);
-
-    let mut cube = NMesh::cube();
-    let (ek, _) = cube.edges.iter().next().unwrap();
-    cube.edge_split(ek);
-
-    create_nmesh(commands, &mut materials, &mut meshes, &mut nmeshes, cube);
 }
 
-#[derive(Component)]
-struct EditorCamera {
-    pub focus: Vec3,
-    pub distance: f32,
+fn post_startup(
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    highlight: ResMut<GlobalHighlight<StandardMaterial>>,
+) {
+    let mut make_translucent = |handle| {
+        let mat = materials.get_mut(handle).unwrap();
+        mat.alpha_mode = AlphaMode::Blend;
+        mat.base_color.set_a(0.5);
+    };
+
+    make_translucent(&highlight.hovered);
+    make_translucent(&highlight.pressed);
+    make_translucent(&highlight.selected);
 }
 
 #[derive(SystemParam)]
-struct CameraInput<'w, 's> {
+pub struct CameraInput<'w, 's> {
     mouse_motion: EventReader<'w, 's, MouseMotion>,
 
     mouse_wheel: EventReader<'w, 's, MouseWheel>,
@@ -80,7 +105,7 @@ struct CameraInput<'w, 's> {
     mouse_button: Res<'w, Input<MouseButton>>,
 }
 
-fn control_camera(
+pub fn control_camera(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
     mut camera_input: CameraInput,
     mut camera: Query<(&mut EditorCamera, &mut Transform, &Projection), Without<SolidShadingLight>>,
@@ -96,8 +121,6 @@ fn control_camera(
     );
     let win_scale_factor = win_phys_resolution.recip();
 
-    let orbit_button = MouseButton::Middle;
-
     enum OrbitOrPan {
         Orbit,
         Pan,
@@ -106,7 +129,9 @@ fn control_camera(
     let mut orbit_or_pan = OrbitOrPan::Orbit;
     let mut mouse_motion = Vec2::ZERO;
 
-    if camera_input.mouse_button.pressed(orbit_button) {
+    if camera_input.mouse_button.pressed(MouseButton::Middle)
+        || camera_input.key_input.pressed(KeyCode::Space)
+    {
         window.cursor.grab_mode = CursorGrabMode::Confined;
 
         for evt in camera_input.mouse_motion.iter() {
@@ -147,7 +172,13 @@ fn control_camera(
         window.cursor.grab_mode = CursorGrabMode::None;
     }
 
-    let scroll: f32 = camera_input.mouse_wheel.iter().map(|evt| evt.y).sum();
+    let scroll: f32 = camera_input
+        .mouse_wheel
+        .iter()
+        .fold(0.0, |acc, evt| match evt.unit {
+            MouseScrollUnit::Line => acc + evt.y,
+            MouseScrollUnit::Pixel => acc + evt.y / 32.0,
+        });
 
     let (mut cam, mut transform, proj) = camera.get_single_mut().unwrap();
 
@@ -162,8 +193,8 @@ fn control_camera(
             }
 
             OrbitOrPan::Pan => {
-                // TODO: Mouse acceleration can cause the cursor to move relative to the focal
-                // point. Blender avoids this somehow.
+                // TODO: pan by raycasting against the plane parallel to the camera which contains
+                // the focus point.
 
                 let mut pan = mouse_motion;
 

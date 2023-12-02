@@ -5,8 +5,8 @@ use bevy_egui::{
     egui::{self, emath},
     EguiContexts,
 };
-use cg3::{collider::ColliderShape, hull::Hull, Capsule, Segment, Sphere};
 use glam::{Vec3, Vec3A};
+use mechanica::{collider::ColliderShape, hull::Hull, Capsule, Segment, Sphere};
 
 use crate::{ObjA, ObjB, PhysObj};
 
@@ -70,7 +70,7 @@ impl CapsuleParams {
             label_slider(ui, "Length", &mut self.length, 0.1..=2.0);
             ui.end_row();
 
-            label_slider(ui, "Radius", &mut self.length, 0.1..=2.0);
+            label_slider(ui, "Radius", &mut self.radius, 0.1..=2.0);
             ui.end_row();
         });
     }

@@ -3,7 +3,7 @@ use glam::{Quat, Vec3, Vec3A};
 use crate::Isometry;
 
 /// An axis-aligned bounding box.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Aabb {
     origin: Vec3,
     half_extents: Vec3,
@@ -15,6 +15,27 @@ impl Aabb {
         Aabb {
             origin,
             half_extents,
+        }
+    }
+
+    pub fn of_vertices<I>(vertices: I) -> Aabb
+    where
+        I: IntoIterator<Item = Vec3>,
+    {
+        let mut mins = Vec3A::splat(f32::INFINITY);
+        let mut maxs = Vec3A::splat(f32::NEG_INFINITY);
+
+        for v in vertices.into_iter() {
+            mins = mins.min(v.into());
+            maxs = maxs.max(v.into());
+        }
+
+        let origin = 0.5 * (mins + maxs);
+        let half_extents = 0.5 * (maxs - mins).abs();
+
+        Aabb {
+            origin: origin.into(),
+            half_extents: half_extents.into(),
         }
     }
 
@@ -30,7 +51,12 @@ impl Aabb {
     /// Returns `true` _iff_ `self` fully contains the AABB `b`.
     #[inline]
     pub fn contains_aabb(&self, b: &Aabb) -> bool {
-        self.mins_a().cmple(b.mins_a()).all() && self.maxs_a().cmpge(b.maxs_a()).all()
+        (self.mins_a() - b.mins_a())
+            .cmple(Vec3A::splat(f32::EPSILON))
+            .all()
+            && (self.maxs_a() - b.maxs_a())
+                .cmpge(Vec3A::splat(-f32::EPSILON))
+                .all()
     }
 
     /// Returns `true` _iff_ `self` fully contains the point `point`.
@@ -116,6 +142,7 @@ impl Aabb {
     /// Returns a new AABB which bounds the rotation of this AABB by `quat`.
     ///
     /// The rotation is performed about the world origin.
+    #[must_use = "this returns the rotated AABB, without modifying the original"]
     pub fn rotate(&self, quat: Quat) -> Aabb {
         Aabb {
             origin: (quat * self.origin_a()).into(),
@@ -126,6 +153,7 @@ impl Aabb {
     /// Returns a new AABB which bounds the local rotation of this AABB by `quat`.
     ///
     /// The rotation is performed about the AABB's origin rather than the world origin.
+    #[must_use = "this returns the rotated AABB, without modifying the original"]
     pub fn rotate_local(&self, quat: Quat) -> Aabb {
         Aabb {
             origin: self.origin,
@@ -137,6 +165,7 @@ impl Aabb {
     ///
     /// This is equivalent to computing the oriented bounding box produced by transforming `self`
     /// by `iso`, then computing an AABB for that OBB.
+    #[must_use = "this returns the transformed AABB, without modifying the original"]
     pub fn transform(&self, iso: Isometry) -> Aabb {
         let origin = Vec3A::from(iso.translation) + iso.rotation * Vec3A::from(self.origin);
         let half_extents = (iso.rotation * self.half_extents_a()).abs();
@@ -144,6 +173,18 @@ impl Aabb {
         Aabb {
             origin: origin.into(),
             half_extents: half_extents.into(),
+        }
+    }
+
+    /// Increases the extents of the AABB along each axis by `dims` in the negative and positive
+    /// directions.
+    #[must_use = "this returns the dilated AABB, without modifying the original"]
+    pub fn dilate(&self, dims: Vec3) -> Aabb {
+        let dims = Vec3A::from(dims).abs();
+
+        Aabb {
+            half_extents: (self.half_extents_a() + dims).into(),
+            ..*self
         }
     }
 }
