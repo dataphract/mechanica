@@ -7,8 +7,9 @@ use bevy_transform_gizmo::GizmoTransformable;
 use mechanica::{
     collider::ColliderShape,
     contact::{
-        contact_capsule_capsule, contact_capsule_hull, contact_capsule_sphere, contact_hull_hull,
-        contact_hull_sphere, contact_sphere_sphere, Contact,
+        contact_capsule_capsule, contact_capsule_hull, contact_capsule_sphere,
+        contact_collider_collider, contact_hull_hull, contact_hull_sphere, contact_sphere_sphere,
+        Contact,
     },
     testbench::TestbenchPlugins,
     Isometry, Line, Plane, Sphere,
@@ -201,48 +202,10 @@ fn update_contact_vis(
     for (closest, closest_vis) in query.iter() {
         let (a_obj, a_xf) = objs.get(closest.on_a).unwrap();
         let (b_obj, b_xf) = objs.get(closest.on_b).unwrap();
-        let a_iso = Isometry::from_transform(*a_xf);
-        let b_iso = Isometry::from_transform(*b_xf);
+        let iso_a = Isometry::from_transform(*a_xf);
+        let iso_b = Isometry::from_transform(*b_xf);
 
-        let contact = match (&a_obj.shape, &b_obj.shape) {
-            (ColliderShape::Capsule(c1), ColliderShape::Capsule(c2)) => {
-                contact_capsule_capsule(c1, a_iso, c2, b_iso)
-            }
-
-            (ColliderShape::Capsule(c), ColliderShape::Hull(h)) => {
-                contact_capsule_hull(c, a_iso, h, b_iso, &mut gizmos)
-            }
-
-            (ColliderShape::Hull(h), ColliderShape::Capsule(c)) => {
-                contact_capsule_hull(c, b_iso, h, a_iso, &mut gizmos).reverse()
-            }
-
-            (ColliderShape::Sphere(s1), ColliderShape::Sphere(s2)) => {
-                contact_sphere_sphere(s1, a_iso, s2, b_iso)
-            }
-
-            (ColliderShape::Capsule(c), ColliderShape::Sphere(s)) => {
-                contact_capsule_sphere(c, a_iso, s, b_iso)
-            }
-
-            (ColliderShape::Sphere(s), ColliderShape::Capsule(c)) => {
-                contact_capsule_sphere(c, b_iso, s, a_iso).reverse()
-            }
-
-            (ColliderShape::Hull(h), ColliderShape::Sphere(s)) => {
-                contact_hull_sphere(h, a_iso, s, b_iso, &mut gizmos)
-            }
-
-            (ColliderShape::Sphere(s), ColliderShape::Hull(h)) => {
-                contact_hull_sphere(h, b_iso, s, a_iso, &mut gizmos).reverse()
-            }
-
-            (ColliderShape::Hull(h1), ColliderShape::Hull(h2)) => {
-                contact_hull_hull(h1, a_iso, h2, b_iso, &mut gizmos)
-            }
-        };
-
-        match contact {
+        match contact_collider_collider(&a_obj.shape, iso_a, &b_obj.shape, iso_b) {
             Contact::Disjoint(d) => {
                 let (mut a_xf, mut a_vis) = vis.get_mut(closest_vis.a_vis).unwrap();
                 *a_xf = Transform::from_translation(d.on_a);

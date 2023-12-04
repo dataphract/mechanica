@@ -9,10 +9,13 @@ use glam::Vec3A;
 use mechanica::{
     bvh::{Bvh, BvhKey},
     collider::ColliderShape,
+    constraint::{
+        Constraint, ConstraintElement, ConstraintSolver, ContactConstraint, PositionalConstraint,
+    },
     rigid::{
-        BroadPhaseCollider, BvhUpdate, CollisionCandidate, ConstraintElement, ConstraintElementMap,
-        PhysicsAngVel, PhysicsCollider, PhysicsVelocity, PositionalConstraint, RigidBodyInertia,
-        RigidBodyMass, TransformRecorder, VelocityIntegrator, VelocitySolver,
+        BroadPhaseCollider, BvhUpdate, CandidateCollider, ColliderMap, CollisionCandidate, Mass,
+        PhysicsAngVel, PhysicsCollider, PhysicsVelocity, RigidBodyInertia, TransformRecorder,
+        VelocityIntegrator, VelocitySolver,
     },
     testbench::TestbenchPlugins,
     Aabb, Isometry, Sphere,
@@ -26,7 +29,9 @@ fn main() {
             record_transform,
             apply_gravity,
             integrate_velocity,
+            generate_collision_constraints,
             resolve_positional_constraints,
+            resolve_contact_constraints,
             solve_velocity,
         )
             .chain(),
@@ -61,7 +66,7 @@ pub struct PhysicsBundle {
 #[derive(Bundle)]
 pub struct RigidBodyBundle {
     pub physics: PhysicsBundle,
-    pub mass: RigidBodyMass,
+    pub mass: Mass,
     pub inertia: RigidBodyInertia,
     pub ang_vel: PhysicsAngVel,
 }
@@ -136,6 +141,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.insert_resource(CollisionCandidates::with_capacity(1024));
+    commands.insert_resource(ContactConstraints::with_capacity(1024));
     commands.insert_resource(FixedTime::new_from_secs(1.0 / 64.0));
     commands.insert_resource(PhysicsBvh(Bvh::with_capacity(1024)));
     commands.insert_resource(PhysicsSubstepCount::new(20));
@@ -153,7 +159,7 @@ fn setup(
             transform: default(),
             velocity: default(),
         },
-        mass: RigidBodyMass::new(mass),
+        mass: Mass::new(mass),
         inertia: RigidBodyInertia::solid_sphere(sphere_radius, mass).unwrap(),
         ang_vel: default(),
     };
@@ -188,16 +194,14 @@ fn setup(
             aabb: Aabb::new(Vec3::ZERO, Vec3::ONE),
         })
         .insert(pbr_sphere(&mut meshes, &mut materials))
-        .insert(Transform::from_xyz(0.0, 1.5, 0.0))
+        .insert(Transform::from_xyz(0.05, 1.4, 0.0))
         .insert(PrevTransform(Transform::from_xyz(0.0, 1.5, 0.0)))
         .insert(Gravity)
         .id();
 
     commands.spawn(PositionalConstraint {
-        elem_a: anchor,
-        anchor_a: Vec3A::ZERO,
-        elem_b: pendulum,
-        anchor_b: Vec3A::ZERO,
+        keys: [anchor, pendulum],
+        local_anchors: [Vec3::ZERO, Vec3::ZERO],
         lower_bound: 0.0,
         upper_bound: 0.5,
         compliance: 0.00001,
@@ -325,7 +329,7 @@ fn gather_collision_candidates(
 
     candidates
         .candidates
-        .extend(mechanica::rigid::gather_collision_candidates(
+        .extend(mechanica::rigid::generate_collision_candidates(
             &bvh.0,
             colliders.iter(),
         ));
@@ -412,74 +416,121 @@ fn integrate_velocity(substep: Res<PhysicsSubstep>, mut query: Query<VelocityInt
 struct ConstraintElementQuery {
     transform: &'static mut Transform,
     prev_transform: &'static mut PrevTransform,
-    mass: &'static RigidBodyMass,
+    mass: &'static Mass,
     inertia: &'static RigidBodyInertia,
 }
 
 // Orphan rule :(
 struct ConstraintElementQueryWrapper<'world, 'state>(Query<'world, 'state, ConstraintElementQuery>);
 
-impl<'world, 'state> ConstraintElementMap for ConstraintElementQueryWrapper<'world, 'state> {
-    type Key = Entity;
+impl<'world, 'state> ConstraintSolver<Entity> for ConstraintElementQueryWrapper<'world, 'state> {
+    type Element<'e> = ConstraintElementQueryItem<'e> where Self: 'e;
 
-    type Element<'elem> = ConstraintElementQueryItem<'elem> where Self: 'elem;
-
-    type Iter<'elem> =
-        QueryIter<'elem, 'state, ConstraintElementQuery, ()> where Self: 'elem;
-
-    #[inline]
-    fn get(&mut self, keys: [Self::Key; 2]) -> [Self::Element<'_>; 2] {
+    fn elements<C, const N: usize>(&mut self, keys: [Entity; N]) -> [Self::Element<'_>; N]
+    where
+        C: Constraint<Entity, N>,
+    {
         self.0.get_many_mut(keys).unwrap()
-    }
-
-    #[inline]
-    fn iter(&mut self) -> Self::Iter<'_> {
-        self.0.iter_mut()
     }
 }
 
-impl<'elem> ConstraintElement<'elem> for ConstraintElementQueryItem<'elem> {
+impl<'elem> ConstraintElement for ConstraintElementQueryItem<'elem> {
     #[inline]
-    fn mass(&self) -> RigidBodyMass {
+    fn mass(&self) -> Mass {
         *self.mass
     }
 
     #[inline]
-    fn inertia(&self) -> RigidBodyInertia {
-        *self.inertia
+    fn transform(&self) -> Isometry {
+        Isometry::from_transform(*self.transform)
     }
 
     #[inline]
-    fn position(&self) -> Vec3A {
-        self.transform.translation.into()
+    fn set_transform(&mut self, transform: Isometry) {
+        *self.transform = transform.into();
     }
 
     #[inline]
-    fn set_position(&mut self, position: Vec3A) {
-        self.transform.translation = position.into();
+    fn inertia(&self) -> Option<RigidBodyInertia> {
+        Some(*self.inertia)
+    }
+}
+
+#[derive(WorldQuery)]
+pub struct ColliderConstraintQuery {
+    collider: &'static PhysicsCollider,
+    transform: &'static Transform,
+}
+
+struct ColliderConstraintQueryWrapper<'w, 's>(Query<'w, 's, ColliderConstraintQuery>);
+
+impl<'w, 's> ColliderMap for ColliderConstraintQueryWrapper<'w, 's> {
+    type Key = Entity;
+
+    type Element<'elem> = ColliderConstraintQueryItem<'elem> where Self: 'elem;
+
+    fn get(&self, key: Self::Key) -> Self::Element<'_> {
+        self.0.get(key).unwrap()
+    }
+}
+
+impl<'elem> CandidateCollider for ColliderConstraintQueryItem<'elem> {
+    #[inline]
+    fn collider(&self) -> &ColliderShape {
+        &self.collider.shape
     }
 
     #[inline]
-    fn orientation(&self) -> Quat {
-        self.transform.rotation
+    fn transform(&self) -> Isometry {
+        Isometry::from_transform(*self.transform)
     }
+}
 
-    #[inline]
-    fn set_orientation(&mut self, orientation: Quat) {
-        self.transform.rotation = orientation;
+#[derive(Resource)]
+pub struct ContactConstraints(Vec<ContactConstraint<Entity>>);
+
+impl ContactConstraints {
+    fn with_capacity(cap: usize) -> ContactConstraints {
+        ContactConstraints(Vec::with_capacity(cap))
     }
+}
+
+fn generate_collision_constraints(
+    candidates: Res<CollisionCandidates>,
+    query: Query<ColliderConstraintQuery>,
+    mut contacts: ResMut<ContactConstraints>,
+) {
+    contacts.0.clear();
+    contacts
+        .0
+        .extend(mechanica::rigid::generate_collision_constraints(
+            candidates.candidates.iter().copied(),
+            ColliderConstraintQueryWrapper(query),
+        ))
 }
 
 fn resolve_positional_constraints(
     substep: Res<PhysicsSubstep>,
-    constraints: Query<&PositionalConstraint<Entity>>,
+    explicit_constraints: Query<&PositionalConstraint<Entity>>,
     elements: Query<ConstraintElementQuery>,
 ) {
-    mechanica::rigid::resolve_positional_constraints(
+    mechanica::rigid::solve_constraints(
         substep.seconds(),
-        constraints.iter(),
+        explicit_constraints.iter(),
         ConstraintElementQueryWrapper(elements),
-    )
+    );
+}
+
+fn resolve_contact_constraints(
+    substep: Res<PhysicsSubstep>,
+    contact_constraints: Res<ContactConstraints>,
+    elements: Query<ConstraintElementQuery>,
+) {
+    mechanica::rigid::solve_constraints(
+        substep.seconds(),
+        contact_constraints.0.iter(),
+        ConstraintElementQueryWrapper(elements),
+    );
 }
 
 #[derive(WorldQuery)]

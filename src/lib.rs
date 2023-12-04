@@ -13,6 +13,7 @@ pub mod bevy_;
 pub mod bvh;
 pub mod closest;
 pub mod collider;
+pub mod constraint;
 pub mod contact;
 pub mod gjk;
 mod glam_ext;
@@ -60,9 +61,28 @@ impl Isometry {
         }
     }
 
+    #[inline]
+    pub fn inverse(self) -> Isometry {
+        Isometry {
+            rotation: self.rotation.inverse(),
+            translation: -self.translation,
+        }
+    }
+
     /// Computes the transformation matrix of the isometry.
     pub fn compute_matrix(&self) -> Mat4 {
         Mat4::from_rotation_translation(self.rotation, self.translation)
+    }
+}
+
+impl From<Isometry> for Transform {
+    #[inline]
+    fn from(iso: Isometry) -> Transform {
+        Transform {
+            translation: iso.translation,
+            rotation: iso.rotation,
+            scale: Vec3::ONE,
+        }
     }
 }
 

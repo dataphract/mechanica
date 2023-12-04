@@ -1,13 +1,12 @@
 //! Computation of contact manifolds between convex sets.
 
-use std::{iter, mem, ptr};
+use std::iter;
 
-use approx::{assert_abs_diff_eq, assert_ulps_eq};
 use arrayvec::ArrayVec;
-use bevy::prelude::{Color, Gizmos};
-use glam::{Quat, Vec3, Vec3A};
+use glam::{Vec3, Vec3A};
 
 use crate::{
+    collider::ColliderShape,
     gjk::{self, Support},
     glam_ext::Vec3AExt,
     hull::{Edge, Face, Hull},
@@ -52,6 +51,7 @@ impl Disjoint {
 }
 
 /// The result of a collision test between two penetrating colliders.
+#[derive(Debug)]
 pub struct Penetrating {
     pub points: ArrayVec<Vec3, 4>,
     /// The axis of minimum penetration between the two colliders.
@@ -76,10 +76,10 @@ pub fn contact_capsule_capsule(
     capsule_b: &Capsule,
     iso_b: Isometry,
 ) -> Contact {
-    let a1 = iso_a * Vec3A::from(capsule_a.segment.a);
-    let b1 = iso_a * Vec3A::from(capsule_a.segment.b);
-    let a2 = iso_b * Vec3A::from(capsule_b.segment.a);
-    let b2 = iso_b * Vec3A::from(capsule_b.segment.b);
+    let a1 = iso_a * capsule_a.segment.a;
+    let b1 = iso_a * capsule_a.segment.b;
+    let a2 = iso_b * capsule_b.segment.a;
+    let b2 = iso_b * capsule_b.segment.b;
 
     let radii = capsule_a.radius + capsule_b.radius;
 
@@ -181,12 +181,12 @@ pub fn contact_capsule_capsule(
     }
 
     // The segments aren't parallel, so they're either penetrating at a single point or disjoint.
-    let s1 = Segment::new(a1.into(), b1.into());
-    let s2 = Segment::new(a2.into(), b2.into());
+    let s1 = Segment::new(a1, b1);
+    let s2 = Segment::new(a2, b2);
 
     let pair = s1.closest_point_to_segment(&s2);
-    let inner_a = Vec3A::from(pair.first.point);
-    let inner_b = Vec3A::from(pair.second.point);
+    let inner_a = pair.first.point;
+    let inner_b = pair.second.point;
 
     let to_b = inner_b - inner_a;
     let inner_dist = to_b.length();
@@ -229,7 +229,6 @@ pub fn contact_capsule_hull(
     iso_a: Isometry,
     hull: &Hull,
     iso_b: Isometry,
-    gizmos: &mut Gizmos,
 ) -> Contact {
     if let Some((on_segment, on_hull)) = gjk::closest(&capsule.segment, iso_a, hull, iso_b) {
         // If GJK succeeds, the colliders are either disjoint or in shallow penetration.
@@ -274,8 +273,8 @@ pub fn contact_capsule_hull(
 
     let mut min_depth = f32::INFINITY;
 
-    let capsule_a = iso_a * Vec3A::from(capsule.segment.a);
-    let capsule_b = iso_a * Vec3A::from(capsule.segment.b);
+    let capsule_a = iso_a * capsule.segment.a;
+    let capsule_b = iso_a * capsule.segment.b;
 
     let mut best_feature = None;
 
@@ -305,14 +304,6 @@ pub fn contact_capsule_hull(
         let a_depth = -plane.distance_to_point(clip_a);
         let b_depth = -plane.distance_to_point(clip_b);
 
-        if a_depth >= 0.0 {
-            gizmos.ray(clip_a.into(), a_depth * plane.normal, Color::BLUE);
-        }
-
-        if b_depth >= 0.0 {
-            gizmos.ray(clip_b.into(), b_depth * plane.normal, Color::BLUE);
-        }
-
         let face_depth = a_depth.max(b_depth);
 
         if face_depth < min_depth {
@@ -332,11 +323,11 @@ pub fn contact_capsule_hull(
         let edge_b = edge.end(iso_b);
 
         // Find the closest points on the capsule segment and the edge.
-        let capsule_segment = Segment::new(capsule_a.into(), capsule_b.into());
-        let edge_segment = Segment::new(edge_a.into(), edge_b.into());
+        let capsule_segment = Segment::new(capsule_a, capsule_b);
+        let edge_segment = Segment::new(edge_a, edge_b);
         let points = capsule_segment.closest_point_to_segment(&edge_segment);
-        let on_cap_seg = Vec3A::from(points.first.point);
-        let on_edge_seg = Vec3A::from(points.second.point);
+        let on_cap_seg = points.first.point;
+        let on_edge_seg = points.second.point;
 
         // Compute the candidate contact normal.
         let contact_normal = (on_cap_seg - on_edge_seg).normalize();
@@ -348,12 +339,6 @@ pub fn contact_capsule_hull(
         }
 
         let inner_depth = points.distance_squared.sqrt();
-        gizmos.ray(
-            points.second.point.into(),
-            contact_normal.into(),
-            Color::GREEN,
-        );
-
         if inner_depth < min_depth {
             min_depth = inner_depth;
             best_feature = Some(Feature::Edge {
@@ -401,8 +386,8 @@ pub fn contact_capsule_sphere(
     sphere: &Sphere,
     iso_b: Isometry,
 ) -> Contact {
-    let a = iso_a * Vec3A::from(capsule.segment.a);
-    let b = iso_a * Vec3A::from(capsule.segment.b);
+    let a = iso_a * capsule.segment.a;
+    let b = iso_a * capsule.segment.b;
     let c = iso_b * Vec3A::from(sphere.center);
 
     // Compute the projection of the sphere center on the capsule's inner segment.
@@ -546,7 +531,6 @@ pub fn contact_hull_hull(
     iso_a: Isometry,
     hull_b: &Hull,
     iso_b: Isometry,
-    gizmos: &mut Gizmos,
 ) -> Contact {
     if let Some((on_a, on_b)) = gjk::closest(hull_a, iso_a, hull_b, iso_b) {
         return Contact::Disjoint(Disjoint {
@@ -835,7 +819,6 @@ pub fn contact_hull_sphere(
     iso_a: Isometry,
     sphere: &Sphere,
     iso_b: Isometry,
-    gizmos: &mut Gizmos,
 ) -> Contact {
     // If the sphere center is not interior to the convex hull, GJK suffices to find the contact.
     if let Some((on_hull, center)) = gjk::closest(hull, iso_a, &sphere.center, iso_b) {
@@ -894,11 +877,16 @@ pub fn contact_sphere_sphere(
     sphere_b: &Sphere,
     iso_b: Isometry,
 ) -> Contact {
+    assert!(!iso_a.translation.is_nan());
+    assert!(!iso_b.translation.is_nan());
+
     let ca = iso_a * Vec3A::from(sphere_a.center);
     let cb = iso_b * Vec3A::from(sphere_b.center);
     let ab = cb - ca;
 
     let center_dist = ab.length();
+    assert!(!center_dist.is_nan());
+
     if center_dist == 0.0 {
         return Contact::Penetrating(Penetrating {
             // TODO: possibly add a parameter allowing a user-specified default axis, or return Err
@@ -911,6 +899,8 @@ pub fn contact_sphere_sphere(
 
     let dist = center_dist - (sphere_a.radius + sphere_b.radius);
     let axis = ab / center_dist;
+
+    assert!(!axis.is_nan());
 
     let on_a = ca + sphere_a.radius * axis;
     let on_b = cb - sphere_b.radius * axis;
@@ -930,9 +920,56 @@ pub fn contact_sphere_sphere(
     }
 }
 
+pub fn contact_collider_collider(
+    collider_a: &ColliderShape,
+    iso_a: Isometry,
+    collider_b: &ColliderShape,
+    iso_b: Isometry,
+) -> Contact {
+    match (collider_a, collider_b) {
+        (ColliderShape::Capsule(c1), ColliderShape::Capsule(c2)) => {
+            contact_capsule_capsule(c1, iso_a, c2, iso_b)
+        }
+
+        (ColliderShape::Capsule(c), ColliderShape::Hull(h)) => {
+            contact_capsule_hull(c, iso_a, h, iso_b)
+        }
+
+        (ColliderShape::Hull(h), ColliderShape::Capsule(c)) => {
+            contact_capsule_hull(c, iso_b, h, iso_a).reverse()
+        }
+
+        (ColliderShape::Sphere(s1), ColliderShape::Sphere(s2)) => {
+            contact_sphere_sphere(s1, iso_a, s2, iso_b)
+        }
+
+        (ColliderShape::Capsule(c), ColliderShape::Sphere(s)) => {
+            contact_capsule_sphere(c, iso_a, s, iso_b)
+        }
+
+        (ColliderShape::Sphere(s), ColliderShape::Capsule(c)) => {
+            contact_capsule_sphere(c, iso_b, s, iso_a).reverse()
+        }
+
+        (ColliderShape::Hull(h), ColliderShape::Sphere(s)) => {
+            contact_hull_sphere(h, iso_a, s, iso_b)
+        }
+
+        (ColliderShape::Sphere(s), ColliderShape::Hull(h)) => {
+            contact_hull_sphere(h, iso_b, s, iso_a).reverse()
+        }
+
+        (ColliderShape::Hull(h1), ColliderShape::Hull(h2)) => {
+            contact_hull_hull(h1, iso_a, h2, iso_b)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::f32::consts::FRAC_PI_2;
+
+    use glam::Quat;
 
     use super::*;
 

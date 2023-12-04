@@ -6,7 +6,7 @@
 //! The core simulation loop is provided by:
 //!
 //! - [`update_bvh`]
-//! - [`gather_collision_candidates`]
+//! - [`generate_collision_candidates`]
 //! - For each substep:
 //!   - [`integrate_velocity`]
 //!   - [`resolve_positional_constraints`]
@@ -20,6 +20,8 @@ use glam::{Mat3A, Quat, Vec3, Vec3A};
 use crate::{
     bvh::{AabbAabbQuery, Bvh, BvhKey, BvhQuery},
     collider::ColliderShape,
+    constraint::{Constraint, ConstraintSolver, ContactConstraint, PositionalConstraint},
+    contact::{contact_collider_collider, Contact},
     Isometry,
 };
 
@@ -72,6 +74,10 @@ where
 }
 
 pub trait BroadPhaseCollider {
+    /// The key type used to uniquely identify simulation elements.
+    ///
+    /// The `Ord` bound is used to deduplicate collision candidates: a pair of elements `(a, b)` is
+    /// only considered a candidate if `a.key() < b.key()`.
     type Key: Copy + Ord;
 
     fn key(&self) -> Self::Key;
@@ -79,7 +85,7 @@ pub trait BroadPhaseCollider {
 }
 
 /// Represents a broad-phase collision between two simulation elements.
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct CollisionCandidate<K> {
     pub a: K,
     pub b: K,
@@ -148,7 +154,8 @@ where
     }
 }
 
-pub fn gather_collision_candidates<I, C>(
+/// Generates collision candidates by testing each element of `colliders` against `bvh`.
+pub fn generate_collision_candidates<I, C>(
     bvh: &Bvh<C::Key>,
     colliders: I,
 ) -> CollisionCandidatesIter<'_, I::IntoIter, C>
@@ -174,10 +181,63 @@ where
 
         let orientation = item.orientation();
         let ang_vel = item.ang_vel();
-        let ang_delta =
-            orientation + Quat::from_vec4((0.5 * ang_vel.get()).extend(0.0)) * orientation;
-        item.set_orientation((orientation + ang_delta).normalize());
+        let ang_delta = Quat::from_vec4((0.5 * ang_vel.get()).extend(0.0)) * orientation;
+        let new_orientation = (orientation + ang_delta).normalize();
+        item.set_orientation(new_orientation);
     }
+}
+
+pub trait ColliderMap {
+    type Key: Copy;
+    type Element<'elem>: CandidateCollider
+    where
+        Self: 'elem;
+
+    fn get(&self, key: Self::Key) -> Self::Element<'_>;
+}
+
+pub trait CandidateCollider {
+    fn collider(&self) -> &ColliderShape;
+    fn transform(&self) -> Isometry;
+}
+
+pub fn generate_collision_constraints<I, C>(
+    candidates: I,
+    map: C,
+) -> impl Iterator<Item = ContactConstraint<C::Key>>
+where
+    I: IntoIterator<Item = CollisionCandidate<C::Key>>,
+    C: ColliderMap,
+{
+    candidates
+        .into_iter()
+        .filter_map(move |candidate| {
+            let a = map.get(candidate.a);
+            let b = map.get(candidate.b);
+
+            let contact =
+                contact_collider_collider(a.collider(), a.transform(), b.collider(), b.transform());
+
+            let p = match contact {
+                Contact::Disjoint(_) => return None,
+                Contact::Penetrating(p) => p,
+            };
+
+            println!("contact: {p:?}");
+
+            let a_transform = a.transform();
+            let b_transform = b.transform();
+
+            // TODO: return the contact manifold in local space of the colliders so this
+            // inverse-transform-multiply isn't necessary.
+            Some(p.points.into_iter().map(move |point| ContactConstraint {
+                keys: [candidate.a, candidate.b],
+                contact_points: [a_transform.inverse() * point, b_transform.inverse() * point],
+                normal: p.axis,
+                penetration_depth: p.depth,
+            }))
+        })
+        .flatten()
 }
 
 fn positional_gen_inv_mass(inv_mass: f32, point: Vec3A, dir: Vec3A, inv_inertia: Mat3A) -> f32 {
@@ -186,51 +246,20 @@ fn positional_gen_inv_mass(inv_mass: f32, point: Vec3A, dir: Vec3A, inv_inertia:
 }
 
 /// Resolves positional (i.e. distance) constraints between simulation elements.
-pub fn resolve_positional_constraints<'a, I, M>(substep: f32, constraints: I, mut element_map: M)
-where
-    I: IntoIterator<Item = &'a PositionalConstraint<M::Key>> + 'a,
-    M: ConstraintElementMap,
-    M::Key: 'a,
+pub fn solve_constraints<'a, I, C, S, K, const N: usize>(
+    substep: f32,
+    constraints: I,
+    mut solver: S,
+) where
+    I: IntoIterator<Item = &'a C> + 'a,
+    C: Constraint<K, N> + 'a,
+    S: ConstraintSolver<K>,
+    K: Copy,
 {
     let inv_substep_2 = substep.powi(2).recip();
 
-    for pc in constraints.into_iter() {
-        let [mut elem_a, mut elem_b] = element_map.get([pc.elem_a, pc.elem_b]);
-
-        let anchor_a = elem_a.position() + elem_a.orientation() * pc.anchor_a;
-        let anchor_b = elem_b.position() + elem_b.orientation() * pc.anchor_b;
-
-        let delta: Vec3A = anchor_b - anchor_a;
-        let dist = delta.length();
-        let dir = delta / dist;
-
-        let inv_mass_a = elem_a.mass().inv_mass;
-        let inv_inertia_a = elem_a.inertia().inv_inertia;
-        let inv_mass_b = elem_b.mass().inv_mass;
-        let inv_inertia_b = elem_b.inertia().inv_inertia;
-
-        let gen_inv_mass_a = positional_gen_inv_mass(inv_mass_a, pc.anchor_a, dir, inv_inertia_a);
-        let gen_inv_mass_b = positional_gen_inv_mass(inv_mass_b, pc.anchor_b, dir, inv_inertia_b);
-
-        let error = (dist - pc.lower_bound).min(0.0) + (dist - pc.upper_bound).max(0.0);
-        let lagrange_denom = (gen_inv_mass_a + gen_inv_mass_b) + inv_substep_2 * pc.compliance;
-        let lagrange = -error / lagrange_denom;
-        let impulse = lagrange * dir;
-
-        elem_a.set_position(elem_a.position() + impulse * inv_mass_a);
-        elem_b.set_position(elem_b.position() + impulse * inv_mass_b);
-
-        let axis_a = 0.5 * inv_inertia_a * pc.anchor_a.cross(impulse);
-        let axis_b = 0.5 * inv_inertia_b * pc.anchor_b.cross(impulse);
-        let rotate_a = Quat::from_vec4(axis_a.extend(0.0)) * elem_a.orientation();
-        let rotate_b = Quat::from_vec4(axis_b.extend(0.0)) * elem_b.orientation();
-
-        // Müller et al.:
-        //   "To update the quaternions based on the angular velocity and to derive the angular
-        //   velocity from the change of the quaternions we use linearized formulas. They are
-        //   fast and robust and well suited for the small time steps used in substepping."
-        elem_a.set_orientation((elem_a.orientation() + rotate_a).normalize());
-        elem_b.set_orientation((elem_b.orientation() - rotate_b).normalize());
+    for constraint in constraints.into_iter() {
+        solver.solve(inv_substep_2, constraint);
     }
 }
 
@@ -245,27 +274,12 @@ where
     for mut solver in solvers.into_iter() {
         let mvmt = solver.position() - solver.prev_position();
         let vel = PhysicsVelocity::new(inv_substep * mvmt);
+        assert!(vel.velocity.length() < 10.0);
         solver.set_velocity(vel);
 
         let rot = solver.prev_orientation() * solver.orientation().inverse();
         solver.set_ang_vel(PhysicsAngVel::new(rot.to_scaled_axis().into()));
     }
-}
-
-/// A positional constraint between a pair of simulation elements.
-#[derive(Component)]
-pub struct PositionalConstraint<K> {
-    pub elem_a: K,
-    pub anchor_a: Vec3A,
-    pub elem_b: K,
-    pub anchor_b: Vec3A,
-
-    // -inf for no lower bound.
-    pub lower_bound: f32,
-    // +inf for no upper bound.
-    pub upper_bound: f32,
-
-    pub compliance: f32,
 }
 
 #[derive(Component)]
@@ -281,15 +295,19 @@ impl PhysicsCollider {
 
 /// Represents the mass of a simulation element in kilograms.
 #[derive(Copy, Clone, Component)]
-pub struct RigidBodyMass {
+pub struct Mass {
     inv_mass: f32,
 }
 
-impl RigidBodyMass {
-    pub fn new(mass: f32) -> RigidBodyMass {
-        RigidBodyMass {
+impl Mass {
+    pub fn new(mass: f32) -> Mass {
+        Mass {
             inv_mass: mass.recip(),
         }
+    }
+
+    pub fn inverse(&self) -> f32 {
+        self.inv_mass
     }
 }
 
@@ -368,6 +386,14 @@ impl RigidBodyInertia {
 
         Some(RigidBodyInertia::diagonal(term, term, term))
     }
+
+    pub fn get(&self) -> Mat3A {
+        self.inertia
+    }
+
+    pub fn inverse(&self) -> Mat3A {
+        self.inv_inertia
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Component)]
@@ -404,7 +430,11 @@ pub struct PhysicsAngVel {
 impl PhysicsAngVel {
     pub fn new(ang_vel: Vec3A) -> PhysicsAngVel {
         let magnitude = ang_vel.length();
-        let axis = (ang_vel / magnitude).into();
+        let axis = if magnitude == 0.0 {
+            Vec3::X
+        } else {
+            (ang_vel / magnitude).into()
+        };
 
         PhysicsAngVel {
             ang_vel: ang_vel.into(),
@@ -461,41 +491,6 @@ pub trait VelocityIntegrator {
 
     /// Returns the angular velocity of the body.
     fn ang_vel(&self) -> PhysicsAngVel;
-}
-
-/// Provides random-access lookup for simulation elements affected by a constraint.
-pub trait ConstraintElementMap {
-    /// The key type used to look up each simulation element.
-    type Key: Copy;
-
-    /// The element type.
-    type Element<'elem>: ConstraintElement<'elem>
-    where
-        Self: 'elem;
-
-    type Iter<'elem>: Iterator<Item = Self::Element<'elem>>
-    where
-        Self: 'elem;
-
-    /// Retrieves the elements associated with `keys`.
-    fn get(&mut self, keys: [Self::Key; 2]) -> [Self::Element<'_>; 2];
-
-    /// Returns an iterator over all constrained simulation elements.
-    fn iter(&mut self) -> Self::Iter<'_>;
-}
-
-pub trait ConstraintElement<'elem> {
-    fn mass(&self) -> RigidBodyMass;
-
-    fn inertia(&self) -> RigidBodyInertia;
-
-    fn position(&self) -> Vec3A;
-
-    fn set_position(&mut self, position: Vec3A);
-
-    fn orientation(&self) -> Quat;
-
-    fn set_orientation(&mut self, orientation: Quat);
 }
 
 /// Solves for the linear and angular velocity of a simulation element after all constraints have
