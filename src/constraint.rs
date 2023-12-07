@@ -12,7 +12,7 @@ use bevy::ecs::component::Component;
 use glam::{Mat3A, Quat, Vec3, Vec3A};
 
 use crate::{
-    rigid::{Mass, RigidBodyInertia},
+    rigid::{Friction, Mass, RigidBodyInertia},
     Isometry,
 };
 
@@ -33,8 +33,12 @@ where
         E: ConstraintElement;
 
     /// Solves the constraint based on the computed solution.
-    fn solve<E>(&self, inv_substep_2: f32, elements: &mut [E; N], computed: &Self::Computed)
-    where
+    fn solve_positions<E>(
+        &self,
+        inv_substep_2: f32,
+        elements: &mut [E; N],
+        computed: &Self::Computed,
+    ) where
         E: ConstraintElement;
 }
 
@@ -54,13 +58,13 @@ where
         C: Constraint<K, N>;
 
     /// Solves the constraint and applies the solution to the simulation elements.
-    fn solve<C, const N: usize>(&mut self, inv_timestep_2: f32, constraint: &C)
+    fn solve_positions<C, const N: usize>(&mut self, inv_timestep_2: f32, constraint: &C)
     where
         C: Constraint<K, N>,
     {
         let mut elements = self.elements::<C, N>(constraint.keys());
         let computed = constraint.compute(&elements);
-        constraint.solve(inv_timestep_2, &mut elements, &computed);
+        constraint.solve_positions(inv_timestep_2, &mut elements, &computed);
     }
 }
 
@@ -235,8 +239,12 @@ where
         }
     }
 
-    fn solve<E>(&self, inv_substep_2: f32, elements: &mut [E; 2], computed: &Self::Computed)
-    where
+    fn solve_positions<E>(
+        &self,
+        inv_substep_2: f32,
+        elements: &mut [E; 2],
+        computed: &Self::Computed,
+    ) where
         E: ConstraintElement,
     {
         assert!(!elements[0].transform().translation.is_nan());
@@ -274,8 +282,14 @@ pub struct ContactConstraint<K> {
     pub keys: [K; 2],
 
     /// The contact points in the local space of each element.
-    pub contact_points: [Vec3; 2],
+    pub local_contact_points: [Vec3; 2],
 
+    // /// The transforms of each element at the previous substep.
+    // TODO: move to ConstraintElement?
+    // pub prev_transforms: [Isometry; 2],
+
+    // /// The friction properties of each element.
+    // pub frictions: [Friction; 2],
     /// The contact normal from the first element to the second.
     pub normal: Vec3,
 
@@ -285,7 +299,9 @@ pub struct ContactConstraint<K> {
 
 /// The computed state of a [`ContactConstraint`].
 pub struct ComputedContactConstraint {
+    /// The transforms of each element at the current substep.
     pub transforms: [Isometry; 2],
+
     pub anchors: [Vec3A; 2],
     pub inv_masses: [f32; 2],
 }
@@ -306,16 +322,20 @@ where
     {
         let transforms = [elements[0].transform(), elements[1].transform()];
         let anchors = [
-            elements[0].anchor(Some(self.contact_points[0].into())),
-            elements[1].anchor(Some(self.contact_points[1].into())),
+            elements[0].anchor(Some(self.local_contact_points[0].into())),
+            elements[1].anchor(Some(self.local_contact_points[1].into())),
         ];
 
         let normal = Vec3A::from(self.normal);
         let inv_masses = [
-            elements[0]
-                .positional_generalized_inverse_mass(Some(self.contact_points[0].into()), normal),
-            elements[1]
-                .positional_generalized_inverse_mass(Some(self.contact_points[1].into()), normal),
+            elements[0].positional_generalized_inverse_mass(
+                Some(self.local_contact_points[0].into()),
+                normal,
+            ),
+            elements[1].positional_generalized_inverse_mass(
+                Some(self.local_contact_points[1].into()),
+                normal,
+            ),
         ];
 
         ComputedContactConstraint {
@@ -325,38 +345,35 @@ where
         }
     }
 
-    fn solve<E>(&self, inv_substep_2: f32, elements: &mut [E; 2], computed: &Self::Computed)
-    where
+    fn solve_positions<E>(
+        &self,
+        inv_substep_2: f32,
+        elements: &mut [E; 2],
+        computed: &Self::Computed,
+    ) where
         E: ConstraintElement,
     {
-        println!("solve contact");
         // Not used: contact constraints have zero compliance.
         let _ = inv_substep_2;
 
         // Compliance term is omitted for rigid body contacts.
-        println!("depth = {}", self.penetration_depth);
         let lagrange = -self.penetration_depth / computed.inv_masses.iter().sum::<f32>();
         let impulse = lagrange * -self.normal;
-        if impulse != Vec3::ZERO {
-            println!("impulse = {impulse}");
-        }
 
         let new_transforms = [
             bikeshed_impulse_transform(
                 &elements[0],
-                Some(self.contact_points[0].into()),
+                Some(self.local_contact_points[0].into()),
                 impulse.into(),
                 computed.inv_masses[0],
             ),
             bikeshed_impulse_transform(
                 &elements[1],
-                Some(self.contact_points[1].into()),
+                Some(self.local_contact_points[1].into()),
                 impulse.into(),
                 computed.inv_masses[1],
             ),
         ];
-
-        println!("new_transforms = {new_transforms:?}");
 
         elements[0].set_transform(new_transforms[0]);
         elements[1].set_transform(new_transforms[1]);

@@ -223,8 +223,6 @@ where
                 Contact::Penetrating(p) => p,
             };
 
-            println!("contact: {p:?}");
-
             let a_transform = a.transform();
             let b_transform = b.transform();
 
@@ -232,7 +230,10 @@ where
             // inverse-transform-multiply isn't necessary.
             Some(p.points.into_iter().map(move |point| ContactConstraint {
                 keys: [candidate.a, candidate.b],
-                contact_points: [a_transform.inverse() * point, b_transform.inverse() * point],
+                local_contact_points: [
+                    a_transform.inverse() * point,
+                    b_transform.inverse() * point,
+                ],
                 normal: p.axis,
                 penetration_depth: p.depth,
             }))
@@ -259,7 +260,7 @@ pub fn solve_constraints<'a, I, C, S, K, const N: usize>(
     let inv_substep_2 = substep.powi(2).recip();
 
     for constraint in constraints.into_iter() {
-        solver.solve(inv_substep_2, constraint);
+        solver.solve_positions(inv_substep_2, constraint);
     }
 }
 
@@ -460,6 +461,11 @@ impl PhysicsAngVel {
     pub fn magnitude(&self) -> f32 {
         self.magnitude
     }
+}
+
+pub struct Friction {
+    pub static_: f32,
+    pub dynamic: f32,
 }
 
 pub trait TransformRecorder {
