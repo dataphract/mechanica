@@ -1,4 +1,4 @@
-//! A computational geometry library for 3D applications.
+//! A high-performance 3D physics simulation library.
 #![cfg_attr(feature = "portable_simd", feature(portable_simd))]
 
 use std::{cmp::Ordering, ops::Mul};
