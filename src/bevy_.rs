@@ -532,20 +532,12 @@ struct VelocitySolverQuery {
 }
 
 impl VelocitySolver for VelocitySolverQueryItem<'_> {
-    fn position(&self) -> Vec3A {
-        self.transform.translation.into()
+    fn transform(&self) -> Isometry {
+        Isometry::from_transform(*self.transform)
     }
 
-    fn prev_position(&self) -> Vec3A {
-        self.prev_transform.0.translation.into()
-    }
-
-    fn orientation(&self) -> Quat {
-        self.transform.rotation
-    }
-
-    fn prev_orientation(&self) -> Quat {
-        self.prev_transform.0.rotation
+    fn prev_transform(&self) -> Isometry {
+        Isometry::from_transform(self.prev_transform.0)
     }
 
     fn set_velocity(&mut self, velocity: PhysicsVelocity) {

@@ -273,12 +273,15 @@ where
     let inv_substep = substep.recip();
 
     for mut solver in solvers.into_iter() {
-        let mvmt = solver.position() - solver.prev_position();
+        let xf = solver.transform();
+        let prev_xf = solver.prev_transform();
+
+        let mvmt = Vec3A::from(xf.translation) - Vec3A::from(prev_xf.translation);
         let vel = PhysicsVelocity::new(inv_substep * mvmt);
         assert!(vel.velocity.length() < 10.0);
         solver.set_velocity(vel);
 
-        let rot = solver.prev_orientation() * solver.orientation().inverse();
+        let rot = prev_xf.rotation * xf.rotation.inverse();
         solver.set_ang_vel(PhysicsAngVel::new(rot.to_scaled_axis().into()));
     }
 }
@@ -502,13 +505,9 @@ pub trait VelocityIntegrator {
 /// Solves for the linear and angular velocity of a simulation element after all constraints have
 /// been solved.
 pub trait VelocitySolver {
-    fn position(&self) -> Vec3A;
+    fn transform(&self) -> Isometry;
 
-    fn prev_position(&self) -> Vec3A;
-
-    fn orientation(&self) -> Quat;
-
-    fn prev_orientation(&self) -> Quat;
+    fn prev_transform(&self) -> Isometry;
 
     fn set_velocity(&mut self, velocity: PhysicsVelocity);
 
