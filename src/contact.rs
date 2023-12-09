@@ -846,28 +846,43 @@ pub fn contact_hull_sphere(
     let center = iso_b * Vec3A::from(sphere.center);
 
     // Find the face closest to the sphere center.
-    let mut min_depth = f32::INFINITY;
-    let mut closest_plane = Plane::new(Vec3::X, 0.0).unwrap();
+    //
+    // Note that GJK can fail even if the sphere center is outside the hull due to numerical
+    // instability, so the signed distance from a face to the sphere center may be positive.
+    let mut max_dist = f32::NEG_INFINITY;
+    let mut closest_plane = None;
     for face in hull.iter_faces() {
         let plane = face.plane(iso_a);
 
         assert!(plane.normal.is_normalized());
 
-        let depth = plane.distance_to_point(center).abs();
+        let dist = plane.distance_to_point(center);
 
-        if depth < min_depth {
-            closest_plane = plane;
-            min_depth = depth;
+        if dist > max_dist {
+            closest_plane = Some(plane);
+            max_dist = dist;
         }
     }
 
-    let on_hull = closest_plane.project_point(center);
+    let closest_plane = closest_plane.unwrap();
+    let axis = closest_plane.normal;
 
-    Contact::Penetrating(Penetrating {
-        points: ArrayVec::from_iter([on_hull.into()]),
-        axis: closest_plane.normal,
-        depth: min_depth + sphere.radius,
-    })
+    let on_hull = closest_plane.project_point(center);
+    let on_sphere = center - sphere.radius * Vec3A::from(axis);
+
+    if max_dist > 0.0 {
+        Contact::Penetrating(Penetrating {
+            points: ArrayVec::from_iter([(0.5 * (on_hull + on_sphere)).into()]),
+            axis,
+            depth: sphere.radius - max_dist,
+        })
+    } else {
+        Contact::Penetrating(Penetrating {
+            points: ArrayVec::from_iter([on_hull.into()]),
+            axis,
+            depth: -max_dist + sphere.radius,
+        })
+    }
 }
 
 /// Computes the contact between two spheres.
