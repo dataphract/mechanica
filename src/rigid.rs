@@ -170,6 +170,7 @@ where
     }
 }
 
+#[tracing::instrument(skip(integrators))]
 pub fn integrate_velocity<I, V>(substep: f32, integrators: I)
 where
     I: IntoIterator<Item = V>,
@@ -201,13 +202,15 @@ pub trait CandidateCollider {
     fn transform(&self) -> Isometry;
 }
 
-pub fn generate_collision_constraints<I, C>(
+#[tracing::instrument(skip_all)]
+pub fn generate_contact_constraints<I, C>(
     candidates: I,
     map: C,
 ) -> impl Iterator<Item = ContactConstraint<C::Key>>
 where
     I: IntoIterator<Item = CollisionCandidate<C::Key>>,
     C: ColliderMap,
+    C::Key: fmt::Debug,
 {
     candidates
         .into_iter()
@@ -247,6 +250,7 @@ fn positional_gen_inv_mass(inv_mass: f32, point: Vec3A, dir: Vec3A, inv_inertia:
 }
 
 /// Resolves positional (i.e. distance) constraints between simulation elements.
+#[tracing::instrument(skip(constraints, solver))]
 pub fn solve_constraints<'a, I, C, S, K, const N: usize>(
     substep: f32,
     constraints: I,
@@ -265,6 +269,7 @@ pub fn solve_constraints<'a, I, C, S, K, const N: usize>(
 }
 
 /// Solves for the final velocities of simulation elements at the end of a substep.
+#[tracing::instrument(skip(solvers))]
 pub fn solve_velocity<I, V>(substep: f32, solvers: I)
 where
     I: IntoIterator<Item = V>,

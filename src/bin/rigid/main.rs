@@ -13,10 +13,18 @@ use mechanica::{
     testbench::TestbenchPlugins,
     Aabb, Isometry, Sphere,
 };
+use tracing_subscriber::layer::SubscriberExt;
 
 const GRAVITY_LAYER: u32 = 0;
 
 fn main() {
+    // tracing::subscriber::set_global_default(
+    //     tracing_subscriber::registry()
+    //         .with(tracing_tracy::TracyLayer::new())
+    //         .with(tracing_subscriber::filter::LevelFilter::INFO),
+    // )
+    // .unwrap();
+
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(TestbenchPlugins)
