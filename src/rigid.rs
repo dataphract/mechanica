@@ -244,11 +244,6 @@ where
         .flatten()
 }
 
-fn positional_gen_inv_mass(inv_mass: f32, point: Vec3A, dir: Vec3A, inv_inertia: Mat3A) -> f32 {
-    let axis = point.cross(dir);
-    inv_mass + axis.dot(inv_inertia * axis)
-}
-
 /// Resolves positional (i.e. distance) constraints between simulation elements.
 #[tracing::instrument(skip(constraints, solver))]
 pub fn solve_constraints<'a, I, C, S, K, const N: usize>(
