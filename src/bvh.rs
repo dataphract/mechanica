@@ -97,7 +97,7 @@ impl<T> Bvh<T> {
     /// Returns the number of items in the BVH.
     #[inline]
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        (self.nodes.len() + 1) / 2
     }
 
     /// Returns the AABB associated with `key`.
@@ -604,7 +604,7 @@ impl PartialOrd for NodeCost {
 
 impl Ord for NodeCost {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
+        self.lower_bound.partial_cmp(&other.lower_bound).unwrap()
     }
 }
 
@@ -863,6 +863,19 @@ mod tests {
             tree.point_query(Vec3::ZERO).collect::<HashSet<_>>(),
             HashSet::from_iter([&"c", &"d"])
         );
+    }
+
+    #[test]
+    fn remove_and_re_insert() {
+        let mut bvh = Bvh::new();
+
+        let top = bvh.insert(unit_box(10.0 * Vec3::Y), "top");
+        let mid = bvh.insert(unit_box(5.0 * Vec3::Y), "mid");
+        println!("fwuh");
+        let bot = bvh.insert(unit_box(Vec3::ZERO), "bot");
+
+        bvh.remove(bot);
+        bvh.insert(unit_box(Vec3::ZERO), "bot");
     }
 
     #[test]
