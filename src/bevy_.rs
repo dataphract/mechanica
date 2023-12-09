@@ -44,7 +44,21 @@ impl Ray {
 }
 
 /// Core physics plugin.
-pub struct PhysicsPlugin;
+pub struct PhysicsPlugin {
+    /// Configures the initial number of substeps per fixed timestep.
+    pub num_substeps: u32,
+    /// Configures the initial capacity of the physics BVH.
+    pub bvh_capacity: usize,
+}
+
+impl Default for PhysicsPlugin {
+    fn default() -> Self {
+        Self {
+            num_substeps: 20,
+            bvh_capacity: 1024,
+        }
+    }
+}
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
@@ -73,6 +87,9 @@ impl Plugin for PhysicsPlugin {
                     run_physics_substep_loop,
                 ),
             );
+
+        app.insert_resource(PhysicsSubstepCount::new(self.num_substeps));
+        app.insert_resource(PhysicsBvh(Bvh::with_capacity(self.bvh_capacity)));
     }
 }
 
@@ -176,12 +193,14 @@ fn record_transform(mut query: Query<TransformRecorderQuery>) {
 }
 
 /// Defines global acceleration layers.
+#[doc(alias = "GravityLayers")]
 #[derive(Resource)]
 pub struct PhysicsGlobalAccelLayers {
     pub layers: [Vec3; 32],
 }
 
 /// Selects which global acceleration layers apply to an entity.
+#[doc(alias = "GravityMask")]
 #[derive(Component)]
 pub struct PhysicsGlobalAccelMask {
     mask: u32,
@@ -277,7 +296,7 @@ pub struct PrevTransform(pub Transform);
 pub struct PhysicsBvh(pub Bvh<Entity>);
 
 /// The computed AABB of a physics object for the current physics step.
-#[derive(Component)]
+#[derive(Default, Component)]
 pub struct PhysicsAabb {
     pub aabb: Aabb,
 }
@@ -377,9 +396,9 @@ pub struct ColliderConstraintQuery {
     transform: &'static Transform,
 }
 
-struct ColliderConstraintQueryWrapper<'w, 's>(Query<'w, 's, ColliderConstraintQuery>);
+struct ColliderConstraintQueryWrapper<'a, 'w, 's>(&'a Query<'w, 's, ColliderConstraintQuery>);
 
-impl<'w, 's> ColliderMap for ColliderConstraintQueryWrapper<'w, 's> {
+impl<'w, 's> ColliderMap for ColliderConstraintQueryWrapper<'_, 'w, 's> {
     type Key = Entity;
 
     type Element<'elem> = ColliderConstraintQueryItem<'elem> where Self: 'elem;
@@ -528,17 +547,27 @@ fn gather_collision_candidates(
 }
 
 fn generate_collision_constraints(
+    mut gizmos: Gizmos,
     candidates: Res<CollisionCandidates>,
     query: Query<ColliderConstraintQuery>,
     mut contacts: ResMut<ContactConstraints>,
 ) {
     contacts.0.clear();
-    contacts
-        .0
-        .extend(crate::rigid::generate_collision_constraints(
+    contacts.0.extend(
+        crate::rigid::generate_contact_constraints(
             candidates.candidates.iter().copied(),
-            ColliderConstraintQueryWrapper(query),
-        ))
+            ColliderConstraintQueryWrapper(&query),
+        )
+        .inspect(|cc| {
+            let elem = query.get(cc.keys[0]).unwrap();
+            gizmos.sphere(
+                Isometry::from_transform(*elem.transform) * cc.local_contact_points[0],
+                Quat::IDENTITY,
+                0.1,
+                Color::RED,
+            );
+        }),
+    )
 }
 
 fn resolve_positional_constraints(

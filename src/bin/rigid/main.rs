@@ -80,33 +80,36 @@ fn setup(
             ..default()
         };
 
-    let anchor = commands
-        .spawn(rigid_sphere(f32::INFINITY))
-        .insert(PhysicsAabb {
-            aabb: Aabb::new(Vec3::ZERO, Vec3::ONE),
-        })
-        .insert(pbr_sphere(&mut meshes, &mut materials))
-        .insert(Transform::from_xyz(0.0, 1.0, 0.0))
-        .insert(PrevTransform(Transform::from_xyz(0.0, 1.0, 0.0)))
-        .id();
+    // let anchor = commands
+    //     .spawn(RigidBodyBundle::solid_sphere(sphere_radius, f32::INFINITY))
+    //     .insert(pbr_sphere(&mut meshes, &mut materials))
+    //     .insert(Transform::from_xyz(0.0, 1.0, 0.0))
+    //     .id();
     let pendulum = commands
-        .spawn(rigid_sphere(1.0))
-        .insert(PhysicsAabb {
-            aabb: Aabb::new(Vec3::ZERO, Vec3::ONE),
-        })
+        .spawn(RigidBodyBundle::solid_sphere(sphere_radius, 1.0))
         .insert(pbr_sphere(&mut meshes, &mut materials))
         .insert(Transform::from_xyz(0.05, 1.4, 0.0))
-        .insert(PrevTransform(Transform::from_xyz(0.0, 1.5, 0.0)))
         .insert(PhysicsGlobalAccelMask::new(1 << GRAVITY_LAYER))
         .id();
+    let _floor = commands
+        .spawn(RigidBodyBundle::solid_cuboid(
+            [10.0, 0.5, 10.0],
+            f32::INFINITY,
+        ))
+        .insert(PbrBundle {
+            mesh: meshes.add(shape::Box::new(10.0, 0.5, 10.0).into()),
+            material: materials.add(Color::GRAY.into()),
+            transform: Transform::default(),
+            ..default()
+        });
 
-    commands.spawn(PositionalConstraint {
-        keys: [anchor, pendulum],
-        local_anchors: [Vec3::ZERO, Vec3::ZERO],
-        lower_bound: 0.0,
-        upper_bound: 0.5,
-        compliance: 0.00001,
-    });
+    // commands.spawn(PositionalConstraint {
+    //     keys: [anchor, pendulum],
+    //     local_anchors: [Vec3::ZERO, Vec3::ZERO],
+    //     lower_bound: 0.0,
+    //     upper_bound: 0.5,
+    //     compliance: 0.00001,
+    // });
 }
 
 fn draw_physics_bvh(bvh: Res<PhysicsBvh>, mut gizmos: Gizmos) {
