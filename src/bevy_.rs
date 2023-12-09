@@ -11,12 +11,13 @@ use crate::{
     constraint::{
         Constraint, ConstraintElement, ConstraintSolver, ContactConstraint, PositionalConstraint,
     },
+    hull::Hull,
     rigid::{
         BroadPhaseCollider, BvhUpdate, CandidateCollider, ColliderMap, CollisionCandidate, Mass,
         PhysicsAngVel, PhysicsCollider, PhysicsVelocity, RigidBodyInertia, TransformRecorder,
         VelocityIntegrator, VelocitySolver,
     },
-    Aabb, Isometry,
+    Aabb, Isometry, Sphere,
 };
 
 use super::Ray;
@@ -216,8 +217,10 @@ fn apply_global_acceleration(
 #[derive(Bundle)]
 pub struct PhysicsBundle {
     pub transform: TransformBundle,
-    pub collider: PhysicsCollider,
+    pub prev_transform: PrevTransform,
     pub velocity: PhysicsVelocity,
+    pub collider: PhysicsCollider,
+    pub aabb: PhysicsAabb,
 }
 
 #[derive(Bundle)]
@@ -226,6 +229,45 @@ pub struct RigidBodyBundle {
     pub mass: Mass,
     pub inertia: RigidBodyInertia,
     pub ang_vel: PhysicsAngVel,
+}
+
+impl RigidBodyBundle {
+    pub fn solid_sphere(radius: f32, mass: f32) -> RigidBodyBundle {
+        RigidBodyBundle {
+            physics: PhysicsBundle {
+                collider: PhysicsCollider {
+                    shape: ColliderShape::Sphere(Sphere {
+                        center: Vec3::ZERO,
+                        radius,
+                    }),
+                },
+                transform: default(),
+                prev_transform: default(),
+                velocity: default(),
+                aabb: default(),
+            },
+            mass: Mass::new(mass),
+            inertia: RigidBodyInertia::solid_sphere(radius, mass).unwrap(),
+            ang_vel: default(),
+        }
+    }
+
+    pub fn solid_cuboid(half_extents: [f32; 3], mass: f32) -> RigidBodyBundle {
+        RigidBodyBundle {
+            physics: PhysicsBundle {
+                collider: PhysicsCollider {
+                    shape: ColliderShape::Hull(Hull::cuboid(half_extents.into())),
+                },
+                transform: default(),
+                prev_transform: default(),
+                velocity: default(),
+                aabb: default(),
+            },
+            mass: Mass::new(mass),
+            inertia: RigidBodyInertia::solid_cuboid(half_extents, mass).unwrap(),
+            ang_vel: default(),
+        }
+    }
 }
 
 #[derive(Default, Component)]
