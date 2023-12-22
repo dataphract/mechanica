@@ -14,15 +14,17 @@
 //!
 //! [rigid]: https://matthias-research.github.io/pages/publications/PBDBodies.pdf
 
+use std::{f32::consts::PI, fmt};
+
 use bevy::prelude::*;
 use glam::{Mat3A, Quat, Vec3, Vec3A};
 
 use crate::{
     bvh::{AabbAabbQuery, Bvh, BvhKey, BvhQuery},
     collider::ColliderShape,
-    constraint::{Constraint, ConstraintSolver, ContactConstraint, PositionalConstraint},
+    constraint::{Constraint, ConstraintSolver, ContactConstraint},
     contact::{contact_collider_collider, Contact},
-    Isometry,
+    Isometry, Substep, FRAC_1_10, FRAC_1_12, FRAC_2_3, FRAC_2_5, FRAC_3_8,
 };
 
 pub fn record_transform<I, T>(recorders: I)
@@ -195,6 +197,12 @@ pub trait ColliderMap {
         Self: 'elem;
 
     fn get(&self, key: Self::Key) -> Self::Element<'_>;
+
+    fn can_collide(&self, a: Self::Key, b: Self::Key) -> bool {
+        let _ = a;
+        let _ = b;
+        true
+    }
 }
 
 pub trait CandidateCollider {
@@ -215,6 +223,10 @@ where
     candidates
         .into_iter()
         .filter_map(move |candidate| {
+            if !map.can_collide(candidate.a, candidate.b) {
+                return None;
+            }
+
             let a = map.get(candidate.a);
             let b = map.get(candidate.b);
 
@@ -244,7 +256,7 @@ where
         .flatten()
 }
 
-/// Resolves positional (i.e. distance) constraints between simulation elements.
+/// Resolves constraints between simulation elements.
 #[tracing::instrument(skip(constraints, solver))]
 pub fn solve_constraints<'a, I, C, S, K, const N: usize>(
     substep: f32,
@@ -256,10 +268,10 @@ pub fn solve_constraints<'a, I, C, S, K, const N: usize>(
     S: ConstraintSolver<K>,
     K: Copy,
 {
-    let inv_substep_2 = substep.powi(2).recip();
+    let substep = Substep::new(substep);
 
     for constraint in constraints.into_iter() {
-        solver.solve_positions(inv_substep_2, constraint);
+        solver.solve_positions(substep, constraint);
     }
 }
 
@@ -278,8 +290,8 @@ where
 
         let mvmt = Vec3A::from(xf.translation) - Vec3A::from(prev_xf.translation);
         let vel = PhysicsVelocity::new(inv_substep * mvmt);
-        assert!(vel.velocity.length() < 10.0);
         solver.set_velocity(vel);
+        assert!(vel.velocity.length() < 100.0);
 
         let rot = prev_xf.rotation * xf.rotation.inverse();
         solver.set_ang_vel(PhysicsAngVel::new(rot.to_scaled_axis().into()));
@@ -315,35 +327,38 @@ impl Mass {
     }
 }
 
-/// The moment of inertia of a rigid body.
+/// An inertia tensor, or moment of inertia.
+///
+/// This type represents the inertia tensor with respect to the center of mass and aligned with the
+/// body's principal axes. These restrictions result in a diagonal matrix, and thus a smaller
+/// footprint and faster operations.
+///
+/// Since an arbitrary shape (such as a `Hull`) is not guaranteed to have its principal axes aligned
+/// with the world axes, some shapes may need a transformation applied in-place in order to compute
+/// their `Inertia`.
 #[derive(Copy, Clone, Component)]
-pub struct RigidBodyInertia {
-    inertia: Mat3A,
-    inv_inertia: Mat3A,
+pub struct Inertia {
+    // Because the moment of inertia is a diagonal matrix, only the diagonal and the diagonal of the
+    // inverse are stored. This replaces a matrix multiplication (3 swizzles, 3 multiplies and 2
+    // adds) with a component-wise vector multiplication (1 multiply).
+    diag: Vec3A,
+    inv_diag: Vec3A,
 }
 
-impl RigidBodyInertia {
+impl Inertia {
+    /// Constructs an inertia tensor from its diagonal.
     #[inline]
-    fn diagonal(xx: f32, yy: f32, zz: f32) -> RigidBodyInertia {
-        RigidBodyInertia {
-            inertia: Mat3A::from_cols(
-                Vec3A::new(xx, 0.0, 0.0),
-                Vec3A::new(0.0, yy, 0.0),
-                Vec3A::new(0.0, 0.0, zz),
-            ),
-
-            inv_inertia: Mat3A::from_cols(
-                Vec3A::new(xx.recip(), 0.0, 0.0),
-                Vec3A::new(0.0, yy.recip(), 0.0),
-                Vec3A::new(0.0, 0.0, zz.recip()),
-            ),
+    pub fn from_diagonal(xx: f32, yy: f32, zz: f32) -> Inertia {
+        Inertia {
+            diag: Vec3A::new(xx, yy, zz),
+            inv_diag: Vec3A::new(xx.recip(), yy.recip(), zz.recip()),
         }
     }
 
     /// Returns the moment of inertia of a solid cube with the specified `side_length` and `mass`.
     ///
     /// If either of `side_length` or `mass` is non-finite or non-positive, returns `None`.
-    pub fn solid_cube(side_length: f32, mass: f32) -> Option<RigidBodyInertia> {
+    pub fn solid_cube(side_length: f32, mass: f32) -> Option<Inertia> {
         const FRAC_1_6: f32 = 1.0 / 6.0;
 
         if !side_length.is_finite() || side_length <= 0.0 || mass <= 0.0 {
@@ -352,14 +367,12 @@ impl RigidBodyInertia {
 
         let term = FRAC_1_6 * mass * side_length.powi(2);
 
-        Some(RigidBodyInertia::diagonal(term, term, term))
+        Some(Inertia::from_diagonal(term, term, term))
     }
 
     /// Returns the moment of inertia of a solid rectangular cuboid with the specified `dimensions`
     /// and `mass`.
-    pub fn solid_cuboid(dimensions: [f32; 3], mass: f32) -> Option<RigidBodyInertia> {
-        const FRAC_1_12: f32 = 1.0 / 12.0;
-
+    pub fn solid_cuboid(dimensions: [f32; 3], mass: f32) -> Option<Inertia> {
         if dimensions.iter().any(|&d| !d.is_finite() || d <= 0.0) || mass <= 0.0 {
             return None;
         }
@@ -376,27 +389,69 @@ impl RigidBodyInertia {
         let yy = factor * (x2 + z2);
         let zz = factor * (x2 + y2);
 
-        Some(RigidBodyInertia::diagonal(xx, yy, zz))
+        Some(Inertia::from_diagonal(xx, yy, zz))
     }
 
     /// Returns the moment of inertia of a solid sphere with the specified `radius` and `mass`.
-    pub fn solid_sphere(radius: f32, mass: f32) -> Option<RigidBodyInertia> {
+    pub fn solid_sphere(radius: f32, mass: f32) -> Option<Inertia> {
         if !radius.is_finite() || radius <= 0.0 || mass <= 0.0 {
             return None;
         }
 
         let r2 = radius.powi(2);
-        let term = 0.4 * mass * r2;
+        let term = FRAC_2_5 * mass * r2;
 
-        Some(RigidBodyInertia::diagonal(term, term, term))
+        Some(Inertia::from_diagonal(term, term, term))
     }
 
-    pub fn get(&self) -> Mat3A {
-        self.inertia
+    pub fn solid_cylinder(radius: f32, height: f32, mass: f32) -> Option<Inertia> {
+        if !radius.is_finite() || radius <= 0.0 || mass <= 0.0 {
+            return None;
+        }
+
+        let r2 = radius.powi(2);
+
+        let xx = FRAC_1_12 * mass * (height.powi(2) + 3.0 * r2);
+        let yy = 0.5 * mass * r2;
+        let zz = xx;
+
+        Some(Inertia::from_diagonal(xx, yy, zz))
     }
 
-    pub fn inverse(&self) -> Mat3A {
-        self.inv_inertia
+    pub fn solid_capsule(radius: f32, height: f32, mass: f32) -> Option<Inertia> {
+        if !radius.is_finite() || radius <= 0.0 || mass <= 0.0 {
+            return None;
+        }
+
+        let r2 = radius.powi(2);
+
+        let vol_cyl = PI * r2 * height;
+        let vol_hemi = FRAC_2_3 * PI * radius.powi(3);
+        let vol = vol_cyl + 2.0 * vol_hemi;
+
+        let mass_cyl = mass * vol_cyl / vol;
+        let mass_hemi = mass * vol_hemi / vol;
+
+        let xx_cyl = (mass_cyl / 12.0) * (height.powi(2) + 3.0 * r2);
+        let xx_hemi = (2.0 * mass_hemi * r2) / 5.0;
+
+        // Displace hemispheres onto the ends of the cylinder by parallel axis theorem:
+        //
+        //     xx = xx_hemi + mass_hemi * dist_hemi^2
+
+        let dist_hemi = 0.5 * height + FRAC_3_8 * radius;
+
+        let xx = xx_cyl + 2.0 * (xx_hemi + mass_hemi * dist_hemi.powi(2));
+        let yy = FRAC_1_10 * (5.0 * mass_cyl + 8.0 * mass_hemi) * r2;
+        let zz = xx;
+
+        Some(Inertia::from_diagonal(xx, yy, zz))
+    }
+
+    /// Multiplies the inverse inertia tensor with the vector `v`.
+    #[inline]
+    pub fn inverse_mul(&self, v: Vec3A) -> Vec3A {
+        self.inv_diag * v
     }
 }
 

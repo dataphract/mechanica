@@ -3,7 +3,7 @@ use glam::{Quat, Vec3, Vec3A};
 use crate::Isometry;
 
 /// An axis-aligned bounding box.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Aabb {
     origin: Vec3,
     half_extents: Vec3,

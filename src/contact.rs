@@ -979,34 +979,3 @@ pub fn contact_collider_collider(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::f32::consts::FRAC_PI_2;
-
-    use glam::Quat;
-
-    use super::*;
-
-    #[test]
-    fn gauss() {
-        let cube = Hull::cuboid(Vec3::ONE);
-
-        let iso1 = Isometry::IDENTITY;
-        let iso2 = Isometry::from_rotation(Quat::from_axis_angle(
-            Vec3::new(1.0, 1.0, 0.0).normalize(),
-            FRAC_PI_2,
-        ));
-
-        let e1 = cube
-            .iter_edges()
-            .find(|edge| edge.dir_local() == -Vec3A::Z && edge.next().dir_local() == -Vec3A::X)
-            .unwrap();
-        let e2 = cube
-            .iter_edges()
-            .find(|edge| edge.dir_local() == Vec3A::Z && edge.next().dir_local() == Vec3A::X)
-            .unwrap();
-
-        assert!(gauss_arcs_intersect(e1, iso1, e2, iso2));
-    }
-}

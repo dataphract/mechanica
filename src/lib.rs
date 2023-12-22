@@ -1,4 +1,5 @@
 //! A high-performance 3D physics simulation library.
+
 #![cfg_attr(feature = "portable_simd", feature(portable_simd))]
 
 use std::{cmp::Ordering, ops::Mul};
@@ -25,6 +26,14 @@ pub mod zorder;
 
 #[doc(inline)]
 pub use aabb::Aabb;
+
+const FRAC_1_3: f32 = 1.0 / 3.0;
+const FRAC_1_10: f32 = 1.0 / 10.0;
+const FRAC_1_12: f32 = 1.0 / 12.0;
+const FRAC_2_3: f32 = 2.0 / 3.0;
+const FRAC_2_5: f32 = 2.0 / 5.0;
+const FRAC_3_8: f32 = 3.0 / 8.0;
+const TWO_PI: f32 = 2.0 * std::f32::consts::PI;
 
 /// An isometry, or rigid transformation.
 #[derive(Copy, Clone, Debug, Default)]
@@ -780,10 +789,37 @@ impl Obb {
 
     /// Computes the supporting point of the `Obb` in the direction given by `dir`.
     pub fn compute_support(&self, dir: Vec3) -> Vec3 {
-        let local_dir: Vec3A = self.local_to_world.transpose_mul_vec3a(dir.into()).into();
+        let local_dir: Vec3A = self.local_to_world.transpose_mul_vec3a(dir.into());
         let half: Vec3A = self.half_extents.into();
         let local_support: Vec3 = Vec3A::select(local_dir.cmpge(Vec3A::ZERO), half, -half).into();
         self.local_to_world * local_support
+    }
+}
+
+/// Stores the duration of a single physics substep.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Substep {
+    seconds: f32,
+    inv_2: f32,
+}
+
+impl Substep {
+    pub fn new(seconds: f32) -> Substep {
+        assert!(seconds.is_finite() && seconds > 0.0);
+
+        let inv_2 = seconds.recip().powi(2);
+
+        Substep { seconds, inv_2 }
+    }
+
+    #[inline]
+    pub fn seconds(&self) -> f32 {
+        self.seconds
+    }
+
+    #[inline]
+    pub fn inverse_squared(&self) -> f32 {
+        self.inv_2
     }
 }
 

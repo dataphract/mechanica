@@ -92,13 +92,13 @@ impl Default for BoxParams {
 impl BoxParams {
     fn ui(&mut self, ui: &mut egui::Ui, id_source: impl Hash) {
         egui::Grid::new(id_source).show(ui, |ui| {
-            label_slider(ui, "Width", &mut self.dims[0], 0.1..=2.0);
+            label_slider(ui, "Width", &mut self.dims[0], 0.1..=10.0);
             ui.end_row();
 
-            label_slider(ui, "Height", &mut self.dims[1], 0.1..=2.0);
+            label_slider(ui, "Height", &mut self.dims[1], 0.1..=10.0);
             ui.end_row();
 
-            label_slider(ui, "Depth", &mut self.dims[2], 0.1..=2.0);
+            label_slider(ui, "Depth", &mut self.dims[2], 0.1..=10.0);
             ui.end_row();
         });
     }

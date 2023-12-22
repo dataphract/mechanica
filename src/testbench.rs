@@ -10,6 +10,8 @@ use bevy_infinite_grid::{InfiniteGridBundle, InfiniteGridPlugin};
 use bevy_mod_picking::prelude::{GlobalHighlight, RaycastPickCamera};
 use bevy_transform_gizmo::{GizmoPickSource, TransformGizmoPlugin};
 
+use crate::bevy_::RigidBodyBundle;
+
 pub struct TestbenchPlugins;
 
 impl PluginGroup for TestbenchPlugins {
@@ -221,4 +223,26 @@ pub fn control_camera(
 
     let mut solid_light = solid_shading_light.get_single_mut().unwrap();
     *solid_light = Transform::from_rotation(transform.rotation);
+}
+
+pub fn sphere(
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    radius: f32,
+    mass: f32,
+    color: Color,
+) -> impl Bundle {
+    let rigid = RigidBodyBundle::solid_sphere(radius, mass);
+    let pbr = PbrBundle {
+        mesh: meshes.add(
+            shape::UVSphere {
+                radius,
+                ..default()
+            }
+            .into(),
+        ),
+        material: materials.add(color.into()),
+        transform: todo!(),
+        ..default()
+    };
 }

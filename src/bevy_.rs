@@ -1,26 +1,52 @@
+//! Bevy integration for Mechanica.
+//!
+//! # Plugins
+//!
+//! Add the [`PhysicsPlugin`] to an [`App`] to enable physics simulation.
+//!
+//! ```ignore
+//! use bevy::prelude::*;
+//! use mechanica::bevy_::PhysicsPlugin;
+//!
+//! let mut app = App::new();
+//! app.add_plugins(PhysicsPlugin);
+//! ```
+//!
+//! # Resources
+//!
+//! The [`PhysicsPlugin`] provides the following public resources:
+//!
+//! - [`PhysicsIgnoredPairs`] allows pairs of physics objects to be excluded from collision detection.
+//! - [`PhysicsSubstep`] provides the current physics substep duration. This value is not set
+//!   directly but is instead computed based on the fixed timestep and the value of
+//!   [`PhysicsSubstepCount`] (see below).
+//! - [`PhysicsSubstepCount`] controls the number of simulation substeps per fixed timestep.
+//!   Increasing the value results in shorter substeps, and thus more realistic simulation, at the
+//!   cost of CPU time.
+
 use bevy::{
     ecs::{query::WorldQuery, schedule::ScheduleLabel},
-    log,
     prelude::*,
 };
 use glam::Vec3A;
+use hashbrown::{hash_map::Entry, HashMap, HashSet};
+use smallvec::{smallvec, SmallVec};
 
 use crate::{
     bvh::{Bvh, BvhKey},
     collider::ColliderShape,
     constraint::{
         Constraint, ConstraintElement, ConstraintSolver, ContactConstraint, PositionalConstraint,
+        RevoluteConstraint,
     },
     hull::Hull,
     rigid::{
-        BroadPhaseCollider, BvhUpdate, CandidateCollider, ColliderMap, CollisionCandidate, Mass,
-        PhysicsAngVel, PhysicsCollider, PhysicsVelocity, RigidBodyInertia, TransformRecorder,
+        BroadPhaseCollider, BvhUpdate, CandidateCollider, ColliderMap, CollisionCandidate, Inertia,
+        Mass, PhysicsAngVel, PhysicsCollider, PhysicsVelocity, TransformRecorder,
         VelocityIntegrator, VelocitySolver,
     },
-    Aabb, Isometry, Sphere,
+    Aabb, Capsule, Isometry, Ray, Segment, Sphere,
 };
-
-use super::Ray;
 
 impl From<bevy::math::Ray> for Ray {
     fn from(value: bevy::math::Ray) -> Self {
@@ -70,8 +96,9 @@ impl Plugin for PhysicsPlugin {
                 apply_global_acceleration,
                 integrate_velocity,
                 generate_collision_constraints,
-                resolve_positional_constraints,
-                resolve_contact_constraints,
+                solve_explicit_constraints::<PositionalConstraint<Entity>, 2>,
+                solve_explicit_constraints::<RevoluteConstraint<Entity>, 2>,
+                solve_contact_constraints,
                 solve_velocity,
             )
                 .chain(),
@@ -88,14 +115,24 @@ impl Plugin for PhysicsPlugin {
                 ),
             );
 
-        app.insert_resource(PhysicsSubstepCount::new(self.num_substeps));
+        app.insert_resource(CollisionCandidates::with_capacity(1024));
+        app.insert_resource(ContactConstraints::with_capacity(1024));
         app.insert_resource(PhysicsBvh(Bvh::with_capacity(self.bvh_capacity)));
+        app.insert_resource(PhysicsGlobalAccelLayers {
+            layers: [Vec3::ZERO; 32],
+        });
+        app.insert_resource(PhysicsIgnoredPairs::with_capacity(256));
+        app.insert_resource(PhysicsSubstepCount::new(self.num_substeps));
     }
 }
 
 /// The schedule which runs physics simulation substeps.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, ScheduleLabel)]
 struct PhysicsSubstepSchedule;
+
+/// The schedule which runs explicit constraint solvers.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, ScheduleLabel)]
+struct SolveExplicitConstraintsSchedule;
 
 // Based on bevy_time::fixed::run_fixed_update_schedule
 pub fn run_physics_substep_loop(world: &mut World) {
@@ -135,12 +172,14 @@ impl PhysicsSubstepCount {
 /// Stores the duration of a single physics substep.
 #[derive(Resource)]
 pub struct PhysicsSubstep {
-    // TODO: un-pub
     seconds: f32,
+
+    // The square of the inverse of the substep duration.
     inv_2: f32,
 }
 
 impl PhysicsSubstep {
+    /// Constructs a new `PhysicsSubstep` with the specified duration in seconds.
     pub fn new(seconds: f32) -> PhysicsSubstep {
         assert!(seconds.is_finite() && seconds > 0.0);
 
@@ -149,11 +188,31 @@ impl PhysicsSubstep {
         PhysicsSubstep { seconds, inv_2 }
     }
 
+    /// Returns the duration of the current physics substep in seconds.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mechanica::bevy_::PhysicsSubstep;
+    ///
+    /// let substep = PhysicsSubstep::new(0.0625);
+    /// assert_eq!(substep.seconds(), 0.0625);
+    /// ```
     #[inline]
     pub fn seconds(&self) -> f32 {
         self.seconds
     }
 
+    /// Returns the squared inverse of the current physics substep (i.e. `seconds.recip().powi(2)`).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mechanica::bevy_::PhysicsSubstep;
+    ///
+    /// let substep = PhysicsSubstep::new(0.0625);
+    /// assert_eq!(substep.seconds().recip().powi(2), substep.inverse_squared());
+    /// ```
     #[inline]
     pub fn inverse_squared(&self) -> f32 {
         self.inv_2
@@ -190,6 +249,105 @@ impl TransformRecorder for TransformRecorderQueryItem<'_> {
 
 fn record_transform(mut query: Query<TransformRecorderQuery>) {
     crate::rigid::record_transform(query.iter_mut());
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+struct IgnoredPair {
+    a: Entity,
+    b: Entity,
+}
+
+impl IgnoredPair {
+    fn new(a: Entity, b: Entity) -> Option<IgnoredPair> {
+        if a == b {
+            return None;
+        }
+
+        let (a, b) = if a < b { (a, b) } else { (b, a) };
+
+        Some(IgnoredPair { a, b })
+    }
+}
+
+#[derive(Resource)]
+pub struct PhysicsIgnoredPairs {
+    // Per-entity sorted list of paired entities.
+    //
+    // Storing at most 3 entities inline makes the SmallVec 32 bytes wide.
+    keys: HashMap<Entity, SmallVec<[Entity; 3]>>,
+
+    pairs: HashSet<IgnoredPair>,
+}
+
+impl PhysicsIgnoredPairs {
+    fn with_capacity(cap: usize) -> PhysicsIgnoredPairs {
+        PhysicsIgnoredPairs {
+            keys: HashMap::with_capacity(cap),
+            pairs: HashSet::with_capacity(cap),
+        }
+    }
+
+    fn add_key_to_key(&mut self, src: Entity, dst: Entity) {
+        match self.keys.entry(src) {
+            Entry::Occupied(mut o) => {
+                let v = o.get_mut();
+                if let Err(idx) = v.binary_search(&dst) {
+                    v.insert(idx, dst);
+                }
+            }
+
+            Entry::Vacant(v) => {
+                v.insert(smallvec![dst]);
+            }
+        };
+    }
+
+    fn remove_key_to_key(&mut self, src: Entity, dst: Entity) {
+        let v = &mut self.keys.get_mut(&src).unwrap();
+        let idx = v.binary_search(&dst).unwrap();
+        v.remove(idx);
+    }
+
+    /// Inserts a pair of entities into the set of ignored pairs.
+    ///
+    /// The order of the arguments does not matter.
+    pub fn insert(&mut self, a: Entity, b: Entity) {
+        let Some(pair) = IgnoredPair::new(a, b) else {
+            return;
+        };
+
+        self.add_key_to_key(a, b);
+        self.add_key_to_key(b, a);
+
+        self.pairs.insert(pair);
+    }
+
+    /// Removes a pair of entities from the set of ignored pairs.
+    ///
+    /// The order of the arguments does not matter.
+    pub fn remove(&mut self, a: Entity, b: Entity) {
+        let Some(pair) = IgnoredPair::new(a, b) else {
+            return;
+        };
+
+        self.remove_key_to_key(a, b);
+        self.remove_key_to_key(b, a);
+
+        self.pairs.remove(&pair);
+    }
+
+    /// Removes all ignored pairs containing `entity`.
+    pub fn remove_all(&mut self, entity: Entity) {
+        let v = self.keys.remove(&entity).expect("entity not present");
+
+        for other in v {
+            let pair = IgnoredPair::new(entity, other).unwrap();
+
+            self.remove_key_to_key(other, entity);
+
+            self.pairs.remove(&pair);
+        }
+    }
 }
 
 /// Defines global acceleration layers.
@@ -246,7 +404,7 @@ pub struct PhysicsBundle {
 pub struct RigidBodyBundle {
     pub physics: PhysicsBundle,
     pub mass: Mass,
-    pub inertia: RigidBodyInertia,
+    pub inertia: Inertia,
     pub ang_vel: PhysicsAngVel,
 }
 
@@ -266,7 +424,7 @@ impl RigidBodyBundle {
                 aabb: default(),
             },
             mass: Mass::new(mass),
-            inertia: RigidBodyInertia::solid_sphere(radius, mass).unwrap(),
+            inertia: Inertia::solid_sphere(radius, mass).unwrap(),
             ang_vel: default(),
         }
     }
@@ -283,7 +441,33 @@ impl RigidBodyBundle {
                 aabb: default(),
             },
             mass: Mass::new(mass),
-            inertia: RigidBodyInertia::solid_cuboid(half_extents, mass).unwrap(),
+            inertia: Inertia::solid_cuboid(half_extents, mass).unwrap(),
+            ang_vel: default(),
+        }
+    }
+
+    pub fn solid_capsule(radius: f32, height: f32, mass: f32) -> RigidBodyBundle {
+        let radius = radius.abs();
+        let height = height.abs();
+
+        RigidBodyBundle {
+            physics: PhysicsBundle {
+                collider: PhysicsCollider {
+                    shape: ColliderShape::Capsule(Capsule {
+                        segment: Segment {
+                            a: 0.5 * height * Vec3A::Y,
+                            b: -0.5 * height * Vec3A::Y,
+                        },
+                        radius,
+                    }),
+                },
+                transform: default(),
+                prev_transform: default(),
+                velocity: default(),
+                aabb: default(),
+            },
+            mass: Mass::new(mass),
+            inertia: Inertia::solid_capsule(radius, height, mass).unwrap(),
             ang_vel: default(),
         }
     }
@@ -292,6 +476,10 @@ impl RigidBodyBundle {
 #[derive(Default, Component)]
 pub struct PrevTransform(pub Transform);
 
+/// The bounding-volume hierarchy (BVH) used for broad-phase collision detection.
+///
+/// Entities with a [`PhysicsAabb`] component are automatically registered with the BVH at every
+/// fixed timestep.
 #[derive(Resource)]
 pub struct PhysicsBvh(pub Bvh<Entity>);
 
@@ -351,7 +539,7 @@ struct ConstraintElementQuery {
     transform: &'static mut Transform,
     prev_transform: &'static mut PrevTransform,
     mass: &'static Mass,
-    inertia: &'static RigidBodyInertia,
+    inertia: &'static Inertia,
 }
 
 // Orphan rule :(
@@ -385,7 +573,7 @@ impl<'elem> ConstraintElement for ConstraintElementQueryItem<'elem> {
     }
 
     #[inline]
-    fn inertia(&self) -> Option<RigidBodyInertia> {
+    fn inertia(&self) -> Option<Inertia> {
         Some(*self.inertia)
     }
 }
@@ -570,11 +758,13 @@ fn generate_collision_constraints(
     )
 }
 
-fn resolve_positional_constraints(
+fn solve_explicit_constraints<C, const N: usize>(
     substep: Res<PhysicsSubstep>,
-    explicit_constraints: Query<&PositionalConstraint<Entity>>,
+    explicit_constraints: Query<&C>,
     elements: Query<ConstraintElementQuery>,
-) {
+) where
+    C: Component + Constraint<Entity, N>,
+{
     crate::rigid::solve_constraints(
         substep.seconds(),
         explicit_constraints.iter(),
@@ -582,7 +772,7 @@ fn resolve_positional_constraints(
     );
 }
 
-fn resolve_contact_constraints(
+fn solve_contact_constraints(
     substep: Res<PhysicsSubstep>,
     contact_constraints: Res<ContactConstraints>,
     elements: Query<ConstraintElementQuery>,

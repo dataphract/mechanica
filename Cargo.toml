@@ -21,6 +21,7 @@ bitvec = "1.0.1"
 glam = { version = "0.24.2", features = ["approx"] }
 hashbrown = "0.14.1"
 slotmap = "1.0.6"
+smallvec = { version = "1.11.2", features = ["const_generics", "union"] }
 
 # TODO: make optional
 tracing = "0.1.40"
