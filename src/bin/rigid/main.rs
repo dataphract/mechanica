@@ -1,3 +1,4 @@
+#![cfg(feature = "bevy")]
 use bevy::prelude::*;
 use mechanica::{
     bevy_::{

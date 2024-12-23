@@ -4,11 +4,7 @@ use std::{
     ptr,
 };
 
-use bevy::{
-    prelude::*,
-    render::{mesh::Indices, render_resource::PrimitiveTopology},
-};
-use glam::{Vec3, Vec3A};
+use glam::{Quat, Vec3, Vec3A};
 use hashbrown::HashSet;
 
 use crate::{Aabb, Isometry, Plane, Segment};
@@ -168,7 +164,13 @@ impl Hull {
         self.vertices[vid].into()
     }
 
-    pub fn to_mesh(&self) -> Mesh {
+    #[cfg(feature = "bevy")]
+    pub fn to_mesh(&self) -> bevy::render::mesh::Mesh {
+        use bevy::{
+            prelude::*,
+            render::{mesh::Indices, render_resource::PrimitiveTopology},
+        };
+
         let mut positions = Vec::new();
         let mut normals = Vec::new();
         let mut indices = Vec::new();

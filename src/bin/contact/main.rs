@@ -1,3 +1,4 @@
+#![cfg(feature = "bevy")]
 use std::iter;
 
 use arrayvec::ArrayVec;

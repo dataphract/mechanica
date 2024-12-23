@@ -1,4 +1,3 @@
-use bevy::ecs::component::Component;
 use glam::{Vec3, Vec3A};
 
 use crate::{
@@ -9,7 +8,7 @@ use crate::{
 use super::positional_gen_inv_mass;
 
 /// A constraint governing the distance between two elements.
-#[derive(Component)]
+#[cfg_attr(feature = "bevy", derive(bevy::ecs::component::Component))]
 pub struct PositionalConstraint<K> {
     /// The unique keys of the elements of the constraint.
     pub keys: [K; 2],

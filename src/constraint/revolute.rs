@@ -1,6 +1,5 @@
-use std::f32::consts::{FRAC_PI_2, PI};
+use std::f32::consts::PI;
 
-use bevy::ecs::component::Component;
 use glam::{Quat, Vec3, Vec3A};
 
 use crate::{
@@ -8,9 +7,7 @@ use crate::{
     Isometry, Substep, TWO_PI,
 };
 
-use super::{
-    angular_gen_inv_mass, compute_angular_delta, compute_angular_impulse, cylindrical_angle,
-};
+use super::{compute_angular_impulse, cylindrical_angle};
 
 /// Normalizes an angle to the range [-π, π].
 fn normalize_angle(angle: f32) -> f32 {
@@ -73,7 +70,7 @@ impl AngleTarget {
 }
 
 /// A constraint modeling a revolute joint between two elements.
-#[derive(Component)]
+#[cfg_attr(feature = "bevy", derive(bevy::ecs::component::Component))]
 pub struct RevoluteConstraint<K> {
     /// The unique keys of each element.
     pub keys: [K; 2],

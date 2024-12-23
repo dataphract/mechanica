@@ -2,10 +2,12 @@
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
+#[cfg(feature = "bevy")]
 use bevy::reflect::{TypePath, TypeUuid};
 use glam::{Mat3, Vec3};
 use slotmap::{new_key_type, SlotMap};
 
+#[cfg(all(feature = "bevy", feature = "bevy_mod_picking"))]
 pub mod bevy_;
 pub mod edit;
 
@@ -58,8 +60,9 @@ pub struct NLoop {
     face: FaceKey,
 }
 
-#[derive(Debug, TypeUuid, TypePath)]
-#[uuid = "dbcb459d-3d09-4de7-afa8-61b85ae9e46f"]
+#[derive(Debug)]
+#[cfg_attr(feature = "bevy", derive(TypePath, TypeUuid))]
+#[cfg_attr(feature = "bevy", uuid = "dbcb459d-3d09-4de7-afa8-61b85ae9e46f")]
 pub struct NMesh {
     // TODO: don't pub these
     pub verts: SlotMap<VertKey, NVert>,

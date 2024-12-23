@@ -1,3 +1,4 @@
+#![cfg(feature = "bevy")]
 use std::{hash::Hash, ops::RangeInclusive};
 
 use bevy::prelude::*;

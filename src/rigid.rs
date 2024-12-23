@@ -16,8 +16,9 @@
 
 use std::{f32::consts::PI, fmt};
 
-use bevy::prelude::*;
-use glam::{Mat3A, Quat, Vec3, Vec3A};
+#[cfg(feature = "bevy")]
+use bevy::ecs::component::Component;
+use glam::{Quat, Vec3, Vec3A};
 
 use crate::{
     bvh::{AabbAabbQuery, Bvh, BvhKey, BvhQuery},
@@ -298,7 +299,7 @@ where
     }
 }
 
-#[derive(Component)]
+#[cfg_attr(feature = "bevy", derive(Component))]
 pub struct PhysicsCollider {
     pub shape: ColliderShape,
 }
@@ -310,7 +311,8 @@ impl PhysicsCollider {
 }
 
 /// Represents the mass of a simulation element in kilograms.
-#[derive(Copy, Clone, Component)]
+#[derive(Copy, Clone)]
+#[cfg_attr(feature = "bevy", derive(Component))]
 pub struct Mass {
     inv_mass: f32,
 }
@@ -336,7 +338,8 @@ impl Mass {
 /// Since an arbitrary shape (such as a `Hull`) is not guaranteed to have its principal axes aligned
 /// with the world axes, some shapes may need a transformation applied in-place in order to compute
 /// their `Inertia`.
-#[derive(Copy, Clone, Component)]
+#[derive(Copy, Clone)]
+#[cfg_attr(feature = "bevy", derive(Component))]
 pub struct Inertia {
     // Because the moment of inertia is a diagonal matrix, only the diagonal and the diagonal of the
     // inverse are stored. This replaces a matrix multiplication (3 swizzles, 3 multiplies and 2
@@ -455,7 +458,8 @@ impl Inertia {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Component)]
+#[derive(Copy, Clone, Debug, Default)]
+#[cfg_attr(feature = "bevy", derive(Component))]
 pub struct PhysicsVelocity {
     velocity: Vec3,
 }
@@ -479,7 +483,8 @@ impl PhysicsVelocity {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Component)]
+#[derive(Copy, Clone, Debug, Default)]
+#[cfg_attr(feature = "bevy", derive(Component))]
 pub struct PhysicsAngVel {
     ang_vel: Vec3,
     axis: Vec3,

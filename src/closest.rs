@@ -1,4 +1,3 @@
-use bevy::prelude::Gizmos;
 use glam::{Vec3, Vec3A};
 
 use crate::{gjk, hull::Hull, Capsule, Isometry, Segment, Sphere};
@@ -42,7 +41,6 @@ pub fn closest_capsule_hull(
     iso_a: Isometry,
     hull: &Hull,
     iso_b: Isometry,
-    gizmos: &mut Gizmos,
 ) -> Option<(Vec3, Vec3)> {
     let (on_segment, on_hull) = gjk::closest(&capsule.segment, iso_a, hull, iso_b)?;
 
@@ -94,7 +92,6 @@ pub fn closest_hull_hull(
     iso_a: Isometry,
     hull_b: &Hull,
     iso_b: Isometry,
-    gizmos: &mut Gizmos,
 ) -> Option<(Vec3, Vec3)> {
     let (on_a, on_b) = gjk::closest(hull_a, iso_a, hull_b, iso_b)?;
     Some((on_a.into(), on_b.into()))
@@ -106,7 +103,6 @@ pub fn closest_hull_sphere(
     iso_a: Isometry,
     sphere: &Sphere,
     iso_b: Isometry,
-    gizmos: &mut Gizmos,
 ) -> Option<(Vec3, Vec3)> {
     let (on_hull, center) = gjk::closest(hull, iso_a, &sphere.center, iso_b)?;
 

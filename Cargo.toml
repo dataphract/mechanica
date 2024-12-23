@@ -8,14 +8,21 @@ edition = "2021"
 keywords = ["physics"]
 categories = ["game-development", "simulation"]
 
+[features]
+default = []
+
+portable_simd = []
+
 [dependencies]
 approx = "0.5.1"
 arrayvec = "0.7.4"
-bevy_egui = "0.22.0"
-bevy_infinite_grid = "0.8.1"
-bevy_mod_picking = "0.15.0"
-bevy_mod_raycast = "0.14.1"
-bevy_transform_gizmo = "0.8.0"
+
+bevy_egui = { version = "0.22.0", optional = true }
+bevy_infinite_grid = { version = "0.8.1", optional = true }
+bevy_mod_picking = { version = "0.15.0", optional = true }
+bevy_mod_raycast = { version = "0.14.1", optional = true }
+bevy_transform_gizmo = { version = "0.8.0", optional = true }
+
 bitflags = "2.4.0"
 bitvec = "1.0.1"
 glam = { version = "0.24.2", features = ["approx"] }
@@ -31,6 +38,7 @@ tracing-tracy = "0.10.4"
 [dependencies."bevy"]
 version = "0.11.3"
 default-features = false
+optional = true
 features = [
     "bevy_asset",
     "bevy_core_pipeline",
@@ -52,3 +60,30 @@ opt-level = 3
 
 [profile.dev]
 opt-level = 1
+
+[[bin]]
+name = "contact"
+required-features = [
+    "bevy",
+    "bevy_infinite_grid",
+    "bevy_mod_picking",
+    "bevy_transform_gizmo",
+]
+
+[[bin]]
+name = "nmesh"
+required-features = [
+    "bevy",
+    "bevy_infinite_grid",
+    "bevy_mod_picking",
+    "bevy_transform_gizmo",
+]
+
+[[bin]]
+name = "rigid"
+required-features = [
+    "bevy",
+    "bevy_infinite_grid",
+    "bevy_mod_picking",
+    "bevy_transform_gizmo",
+]

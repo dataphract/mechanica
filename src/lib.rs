@@ -4,12 +4,14 @@
 
 use std::{cmp::Ordering, ops::Mul};
 
+#[cfg(feature = "bevy")]
 use bevy::prelude::Transform;
 use glam::{Mat3, Mat4, Quat, Vec3, Vec3A};
 
 use crate::glam_ext::Mat3Ext;
 
 mod aabb;
+#[cfg(feature = "bevy")]
 pub mod bevy_;
 pub mod bvh;
 pub mod closest;
@@ -21,6 +23,7 @@ mod glam_ext;
 pub mod hull;
 pub mod nmesh;
 pub mod rigid;
+#[cfg(all(feature = "bevy", feature = "bevy_mod_picking"))]
 pub mod testbench;
 pub mod zorder;
 
@@ -49,6 +52,7 @@ impl Isometry {
     };
 
     /// Constructs an isometry from an arbitrary `Transform` by dropping the scale component.
+    #[cfg(feature = "bevy")]
     pub fn from_transform(transform: Transform) -> Isometry {
         Isometry {
             rotation: transform.rotation,
@@ -84,6 +88,7 @@ impl Isometry {
     }
 }
 
+#[cfg(feature = "bevy")]
 impl From<Isometry> for Transform {
     #[inline]
     fn from(iso: Isometry) -> Transform {

@@ -7,7 +7,6 @@ use std::{
     ops::{Index, IndexMut, Not},
 };
 
-use bevy::prelude::{Color, Gizmos, Transform};
 use glam::{Vec3, Vec3A};
 use slotmap::{new_key_type, SlotMap};
 
@@ -86,7 +85,7 @@ impl<T> Bvh<T> {
     /// Returns `true` if the BVH contains no elements.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        #[cfg(debug)]
+        #[cfg(debug_assertions)]
         {
             assert_eq!(self.nodes.is_empty(), self.root.is_none());
         }
@@ -114,7 +113,10 @@ impl<T> Bvh<T> {
     }
 
     #[inline]
-    pub fn draw(&self, gizmos: &mut Gizmos) {
+    #[cfg(feature = "bevy")]
+    pub fn draw(&self, gizmos: &mut bevy::prelude::Gizmos) {
+        use bevy::prelude::{Color, Gizmos, Transform};
+
         for (_, node) in self.nodes.iter() {
             let color = match node.kind {
                 NodeKind::Branch(_) => Color::BLUE,

@@ -1,4 +1,3 @@
-use bevy::ecs::component::Component;
 use glam::{Vec3, Vec3A};
 
 use crate::{
@@ -9,7 +8,8 @@ use crate::{
 use super::{compute_positional_delta, positional_gen_inv_mass};
 
 /// A constraint resolving a single point of contact between two elements.
-#[derive(Component, Debug)]
+#[derive(Debug)]
+#[cfg_attr(feature = "bevy", derive(bevy::ecs::component::Component))]
 pub struct ContactConstraint<K> {
     /// The unique keys of the elements in contact.
     pub keys: [K; 2],
